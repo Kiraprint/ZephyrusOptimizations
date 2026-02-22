@@ -44,10 +44,12 @@ sudo systemctl enable --now supergfxd
 
 Automatic power profile switching between AC and battery:
 
-| Mode | Target | Features |
-|------|--------|----------|
-| Battery | ~3-5W idle | RAPL limits, turbo off, EPP=power, 60Hz display, WiFi power-save |
+| Mode | Actual Draw | Features |
+|------|-------------|----------|
+| Battery | ~10-12W idle | Turbo off, EPP=power, 48-60Hz VRR, WiFi power-save, dGPU suspended |
 | AC | Full 240W | All cores boosted, EPP=performance, 240Hz display, max cooling |
+
+> **Note**: The original 3-5W target was unrealistic. RAPL power capping caused system lag without meaningful power savings on Arrow Lake (Intel Thread Director + deep C-states are already efficient). Current approach: let the CPU idle naturally, focus on peripherals and display.
 
 ```bash
 # Manual switching
@@ -106,13 +108,16 @@ sudo howdy test
 - ✅ Brightness control fixed
 - ✅ Power switching (AC/Battery)
 - ✅ IR face authentication (login + sudo)
-- ⚠️ supergfxctl Integrated mode broken (kernel 6.19 + asus-armoury driver path mismatch)
+- ✅ Display VRR (48-60Hz battery, 240Hz AC)
+- ✅ dGPU power management (suspended in Hybrid mode)
 
 ## Known Issues
 
-### supergfxctl Integrated Mode
+### supergfxctl GPU Switching
 
-`supergfxctl -m Integrated` fails on kernel 6.19 due to driver path changes. **Workaround**: Keep GPU in Hybrid mode - RTX 5090 idles at near-zero power when unused.
+`supergfxctl -m Integrated` works when run manually but requires logout. The dGPU in Hybrid mode already idles at near-zero power when suspended, so Integrated mode provides minimal additional savings.
+
+**Workaround**: Keep GPU in Hybrid mode - RTX 5090 suspends automatically when unused.
 
 See [PLAN.md](PLAN.md) for details.
 
