@@ -206,7 +206,14 @@ apply_battery() {
     [[ -x "$SCRIPT_DIR/core/platform.sh" ]] && "$SCRIPT_DIR/core/platform.sh" battery
     log ""
     
-    [[ -x "$SCRIPT_DIR/core/gpu.sh" ]] && "$SCRIPT_DIR/core/gpu.sh" battery
+    # DE-specific: display refresh rate first (user-visible, fast)
+    if [[ -n "$DE_DISPLAY" ]] && [[ -x "$DE_DISPLAY" ]]; then
+        log "--- Display Settings ($de) ---"
+        "$DE_DISPLAY" battery
+        log ""
+    fi
+    
+    [[ -x "$SCRIPT_DIR/core/gpu.sh" ]] && timeout 60 "$SCRIPT_DIR/core/gpu.sh" battery
     log ""
     
     [[ -x "$SCRIPT_DIR/core/chromium-igpu.sh" ]] && "$SCRIPT_DIR/core/chromium-igpu.sh" battery
@@ -214,13 +221,6 @@ apply_battery() {
     
     [[ -x "$SCRIPT_DIR/core/nvme-power.sh" ]] && "$SCRIPT_DIR/core/nvme-power.sh" battery
     log ""
-
-    # DE-specific modules
-    if [[ -n "$DE_DISPLAY" ]] && [[ -x "$DE_DISPLAY" ]]; then
-        log "--- Display Settings ($de) ---"
-        "$DE_DISPLAY" battery
-        log ""
-    fi
     
     if [[ -n "$DE_VISUAL" ]] && [[ -x "$DE_VISUAL" ]]; then
         log "--- Visual Effects ($de) ---"
@@ -282,7 +282,14 @@ apply_ac() {
     [[ -x "$SCRIPT_DIR/core/network.sh" ]] && "$SCRIPT_DIR/core/network.sh" ac
     log ""
     
-    [[ -x "$SCRIPT_DIR/core/gpu.sh" ]] && "$SCRIPT_DIR/core/gpu.sh" ac
+    # DE-specific: display refresh rate first (user-visible, fast)
+    if [[ -n "$DE_DISPLAY" ]] && [[ -x "$DE_DISPLAY" ]]; then
+        log "--- Display Settings ($de) ---"
+        "$DE_DISPLAY" ac
+        log ""
+    fi
+    
+    [[ -x "$SCRIPT_DIR/core/gpu.sh" ]] && timeout 60 "$SCRIPT_DIR/core/gpu.sh" ac
     log ""
     
     [[ -x "$SCRIPT_DIR/core/chromium-igpu.sh" ]] && "$SCRIPT_DIR/core/chromium-igpu.sh" ac
@@ -290,13 +297,6 @@ apply_ac() {
     
     [[ -x "$SCRIPT_DIR/core/nvme-power.sh" ]] && "$SCRIPT_DIR/core/nvme-power.sh" ac
     log ""
-
-    # DE-specific modules
-    if [[ -n "$DE_DISPLAY" ]] && [[ -x "$DE_DISPLAY" ]]; then
-        log "--- Display Settings ($de) ---"
-        "$DE_DISPLAY" ac
-        log ""
-    fi
     
     if [[ -n "$DE_VISUAL" ]] && [[ -x "$DE_VISUAL" ]]; then
         log "--- Visual Effects ($de) ---"

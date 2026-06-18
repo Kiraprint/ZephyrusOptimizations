@@ -31,7 +31,7 @@ cardwire_set_mode() {
     local mode="$1"
     if cardwire_available; then
         local out
-        out=$("$CARDWIRE_CMD" set "$mode" 2>&1) || true
+        out=$(timeout 5 "$CARDWIRE_CMD" set "$mode" 2>&1) || true
         if echo "$out" | grep -qi "has been set"; then
             log "  cardwire: mode → $mode"
         else
