@@ -59,7 +59,7 @@ apply_battery() {
     log "--- PCIe ASPM ---"
     local aspm_policy="/sys/module/pcie_aspm/parameters/policy"
     if [[ -w "$aspm_policy" ]]; then
-        sysfs_write "$aspm_policy" "powersupersave" "PCIe ASPM → powersupersave"
+        sysfs_write "$aspm_policy" "powersupersave" "PCIe ASPM → powersupersave" || true
     else
         log "  [skip] PCIe ASPM: read-only (set via kernel cmdline pcie_aspm.policy=powersupersave)"
     fi

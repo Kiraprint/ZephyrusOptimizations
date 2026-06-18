@@ -1,0 +1,11 @@
+# Session backups (contain full conversation history)
+session-backup.json
+*-session-*.json
+
+# Temporary files
+*.tmp
+*.swp
+*~
+
+# Test outputs
+test-*.log

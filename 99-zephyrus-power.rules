@@ -1,0 +1,10 @@
+# =============================================================================
+# Zephyrus G16 Power Supply Udev Rule
+#
+# Automatically triggers power-switch-unified.sh when AC is plugged/unplugged
+# Place in: /etc/udev/rules.d/99-zephyrus-power.rules
+# =============================================================================
+
+SUBSYSTEM=="power_supply", ACTION=="change", KERNEL=="ACAD", \
+  TAG+="udev-acpi", ENV{POWER_SUPPLY_NAME}=="ACAD", \
+  RUN+="/usr/local/bin/zephyrus-power-event $env{POWER_SUPPLY_ONLINE}"
