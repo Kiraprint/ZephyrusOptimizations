@@ -85,15 +85,20 @@ apply_battery() {
     fi
     
     # Get hardware limits
-    local rpn_freq rp1_freq
+    local rpn_freq rp1_freq cur_min
     rpn_freq=$(cat "$GPU_RPn_FREQ" 2>/dev/null || echo "300")
     rp1_freq=$(cat "$GPU_RP1_FREQ" 2>/dev/null || echo "1100")
-    
-    # On battery: Set to RP1 (efficient performance) or lower
+    cur_min=$(cat "$GPU_MIN_FREQ" 2>/dev/null || echo "$rpn_freq")
+
+    # On battery: cap MAX to RP1 (efficient perf) to cut power under GPU load,
+    # but NEVER raise the idle floor — idle is the dominant battery state.
+    # Some Xe/Arc parts misreport RPn above the true floor (e.g. RPn=800 while
+    # gt_min=100), so keep the lowest of (current min, RPn).
     local target_min="$rpn_freq"
+    [[ "$cur_min" -lt "$target_min" ]] 2>/dev/null && target_min="$cur_min"
     local target_max="$rp1_freq"
-    
-    log "Target: min=${target_min}MHz, max=${target_max}MHz (RP1 efficient mode)"
+
+    log "Target: min=${target_min}MHz, max=${target_max}MHz (RP1 cap, idle floor preserved)"
     
     # Set min frequency first (to avoid issues if current max < new min)
     if [[ -w "$GPU_MIN_FREQ" ]]; then

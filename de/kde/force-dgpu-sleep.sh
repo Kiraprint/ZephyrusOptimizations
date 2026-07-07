@@ -276,7 +276,7 @@ main() {
     # Parse arguments
     for arg in "$@"; do
         case "$arg" in
-            force|battery|status)
+            force|status)
                 mode="$arg"
                 ;;
             --dry-run)
@@ -301,7 +301,7 @@ main() {
     fi
     
     case "$mode" in
-        battery|force)
+        force)
             force_sleep
             ;;
         status)

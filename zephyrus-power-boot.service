@@ -1,10 +1,10 @@
 [Unit]
 Description=Zephyrus G16 Power Management on Boot
-After=cardwired.service multi-user.target
+After=multi-user.target
 
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c '/usr/local/bin/zephyrus-power-event $(cat /sys/class/power_supply/ACAD/online)'
+ExecStart=/usr/local/bin/zephyrus-power-event $(cat /sys/class/power_supply/ACAD/online)
 RemainAfterExit=yes
 
 [Install]

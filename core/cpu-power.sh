@@ -12,8 +12,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 LOG_PREFIX="[cpu-power]"
 
-# NOTE: RAPL power limits are now handled by core/rapl-power.sh
-# This module focuses on governor, turbo, and EPP settings only
+# NOTE: RAPL power limiting was intentionally removed (see docs/WHY_NO_RAPL.md).
+# EPP + turbo-off + min_perf_pct already enforce low idle power; a RAPL cap only
+# throttles bursts. This module handles governor, turbo, and EPP settings only.
 
 set_epp_all() {
     local epp="$1"
@@ -53,8 +54,6 @@ show_status() {
     min_perf=$(cat /sys/devices/system/cpu/intel_pstate/min_perf_pct 2>/dev/null)
     echo "min_perf_pct    : ${min_perf}%"
 
-    echo "RAPL limits     : (see ./core/rapl-power.sh status)"
-    
     echo ""
     echo "Current frequencies:"
     for i in 0 6 14; do
@@ -69,7 +68,6 @@ show_status() {
 apply_battery() {
     require_root
     log "=== Applying battery CPU governor settings ==="
-    log "(RAPL power limits handled by rapl-power.sh)"
     log ""
     sysfs_write "/sys/devices/system/cpu/intel_pstate/no_turbo" "1" "Turbo boost → disabled"
     sysfs_write "/sys/devices/system/cpu/intel_pstate/hwp_dynamic_boost" "0" "HWP dynamic boost → disabled"
@@ -85,7 +83,6 @@ apply_battery() {
 apply_ac() {
     require_root
     log "=== Applying AC CPU governor settings ==="
-    log "(RAPL power limits handled by rapl-power.sh)"
     log ""
     sysfs_write "/sys/devices/system/cpu/intel_pstate/no_turbo" "0" "Turbo boost → enabled"
     sysfs_write "/sys/devices/system/cpu/intel_pstate/hwp_dynamic_boost" "1" "HWP dynamic boost → enabled"

@@ -155,6 +155,11 @@ show_status() {
         echo ""
     fi
     
+    if [[ -x "$SCRIPT_DIR/core/igpu-freq.sh" ]]; then
+        "$SCRIPT_DIR/core/igpu-freq.sh" status
+        echo ""
+    fi
+    
     # Call DE-specific status
     load_de_modules "$de"
     if [[ -n "$DE_DISPLAY" ]] && [[ -x "$DE_DISPLAY" ]]; then
@@ -191,6 +196,12 @@ apply_battery() {
     [[ -x "$SCRIPT_DIR/core/kernel-tunables.sh" ]] && "$SCRIPT_DIR/core/kernel-tunables.sh" battery
     log ""
     
+    [[ -x "$SCRIPT_DIR/core/gpu.sh" ]] && timeout 60 "$SCRIPT_DIR/core/gpu.sh" battery || true
+    log ""
+    [[ -x "$SCRIPT_DIR/core/igpu-freq.sh" ]] && "$SCRIPT_DIR/core/igpu-freq.sh" battery || true
+    log ""
+    
+    
     [[ -x "$SCRIPT_DIR/core/pci-power.sh" ]] && "$SCRIPT_DIR/core/pci-power.sh" battery
     log ""
     
@@ -213,12 +224,8 @@ apply_battery() {
         log ""
     fi
     
-    [[ -x "$SCRIPT_DIR/core/gpu.sh" ]] && timeout 60 "$SCRIPT_DIR/core/gpu.sh" battery
-    log ""
-    
     [[ -x "$SCRIPT_DIR/core/chromium-igpu.sh" ]] && "$SCRIPT_DIR/core/chromium-igpu.sh" battery
-    log ""
-    
+
     [[ -x "$SCRIPT_DIR/core/nvme-power.sh" ]] && "$SCRIPT_DIR/core/nvme-power.sh" battery
     log ""
     
@@ -270,6 +277,12 @@ apply_ac() {
     [[ -x "$SCRIPT_DIR/core/kernel-tunables.sh" ]] && "$SCRIPT_DIR/core/kernel-tunables.sh" ac
     log ""
     
+    [[ -x "$SCRIPT_DIR/core/gpu.sh" ]] && timeout 60 "$SCRIPT_DIR/core/gpu.sh" ac || true
+    log ""
+    [[ -x "$SCRIPT_DIR/core/igpu-freq.sh" ]] && "$SCRIPT_DIR/core/igpu-freq.sh" ac || true
+    log ""
+    
+    
     [[ -x "$SCRIPT_DIR/core/pci-power.sh" ]] && "$SCRIPT_DIR/core/pci-power.sh" ac
     log ""
     
@@ -289,8 +302,6 @@ apply_ac() {
         log ""
     fi
     
-    [[ -x "$SCRIPT_DIR/core/gpu.sh" ]] && timeout 60 "$SCRIPT_DIR/core/gpu.sh" ac
-    log ""
     
     [[ -x "$SCRIPT_DIR/core/chromium-igpu.sh" ]] && "$SCRIPT_DIR/core/chromium-igpu.sh" ac
     log ""

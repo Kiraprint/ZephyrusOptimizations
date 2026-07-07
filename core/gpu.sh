@@ -23,6 +23,106 @@ DGPU_SWITCH="/usr/local/bin/dgpu-switch.sh"
 # Cardwire — eBPF-based GPU access control (not power!)
 CARDWIRE_CMD="/usr/bin/cardwire"
 
+# PCIe bridge upstream of dGPU — used for Secondary Bus Reset recovery
+# when GPU is stuck (fallen off the bus, GSP crash)
+GPU_PCI_BRIDGE="0000:00:01.0"
+SETPCI_CMD="/usr/bin/setpci"
+
+
+# --- NVIDIA module unloading (for clean suspend with dGPU off) ---------------
+NVIDIA_MODULES=("nvidia_drm" "nvidia_modeset" "nvidia_uvm" "nvidia" "nvidia_wmi_ec_backlight")
+
+unload_nvidia_modules() {
+    log "  Unloading NVIDIA kernel modules for clean suspend..."
+    local failed=0
+    for mod in "${NVIDIA_MODULES[@]}"; do
+        if lsmod | grep -q "^${mod} "; then
+            if modprobe -r "$mod" 2>/dev/null; then
+                log "    [ok] $mod unloaded"
+            else
+                log "    [skip] $mod still in use (processes hold it)"
+                failed=1
+            fi
+        fi
+    done
+    if [[ "$failed" -eq 0 ]]; then
+        log "  [ok] All NVIDIA modules unloaded — DRM subsystem freed"
+    else
+        log "  [warn] Some modules still loaded — suspend may still fail"
+        log "  [hint] Log out or close apps using libnvidia-*.so"
+    fi
+}
+
+load_nvidia_modules() {
+    log "  Loading NVIDIA kernel modules..."
+    if modprobe nvidia_drm 2>/dev/null; then
+        log "    [ok] NVIDIA modules loaded"
+    else
+        log "    [warn] NVIDIA modules failed to load — reboot may be needed"
+    fi
+}
+
+disable_nvidia_services() {
+    log "  Disabling NVIDIA suspend services (dGPU is off)..."
+    systemctl disable --now nvidia-suspend.service nvidia-resume.service nvidia-hibernate.service 2>/dev/null
+    log "    [ok] nvidia-suspend/resume/hibernate → disabled"
+}
+
+enable_nvidia_services() {
+    log "  Enabling NVIDIA suspend services (dGPU is on)..."
+    systemctl enable --now nvidia-suspend.service nvidia-resume.service nvidia-hibernate.service 2>/dev/null
+    log "    [ok] nvidia-suspend/resume/hibernate → enabled"
+}
+# --- PCIe bridge recovery -------------------------------------------------------
+_pcie_bridge_sbr() {
+    log "  Attempting PCIe Secondary Bus Reset on bridge $GPU_PCI_BRIDGE..."
+
+    if [[ ! -x "$SETPCI_CMD" ]]; then
+        warn "  setpci not found — install pciutils for SBR recovery"
+        return 1
+    fi
+
+    if [[ ! -d "/sys/bus/pci/devices/$GPU_PCI_BRIDGE" ]]; then
+        warn "  Bridge $GPU_PCI_BRIDGE not found — cannot reset"
+        return 1
+    fi
+
+    # Log current link state before reset
+    local link_status
+    link_status=$(setpci -s "$GPU_PCI_BRIDGE" CAP_EXP+0x12.w 2>/dev/null || echo "unknown")
+    log "  Pre-reset link status: $link_status"
+
+    # Set Secondary Bus Reset bit (bit 6) in Bridge Control register
+    # This forces the downstream device to retrain PCIe link
+    if ! $SETPCI_CMD -s "$GPU_PCI_BRIDGE" BRIDGE_CONTROL.w=0x40 2>/dev/null; then
+        warn "  SBR failed — bridge may be locked"
+        return 1
+    fi
+
+    sleep 1
+
+    # Clear SBR bit
+    $SETPCI_CMD -s "$GPU_PCI_BRIDGE" BRIDGE_CONTROL.w=0x00 2>/dev/null || true
+
+    sleep 2
+
+    # Rescan the bridge to re-enumerate downstream devices
+    if [[ -w "/sys/bus/pci/devices/$GPU_PCI_BRIDGE/rescan" ]]; then
+        echo 1 > "/sys/bus/pci/devices/$GPU_PCI_BRIDGE/rescan" 2>/dev/null || true
+    fi
+
+    sleep 1
+
+    # Check if GPU reappeared
+    if [[ -d "/sys/bus/pci/devices/0000:01:00.0" ]]; then
+        log "  GPU reappeared after SBR"
+        return 0
+    else
+        warn "  GPU did not reappear after SBR"
+        return 1
+    fi
+}
+
 cardwire_available() {
     [[ -x "$CARDWIRE_CMD" ]] && systemctl is-active --quiet cardwired 2>/dev/null
 }
@@ -95,6 +195,22 @@ apply_battery() {
         return 1
     fi
 
+    # Check if GPU is accessible — attempt SBR recovery if not
+    local gpu_accessible=true
+    if [[ ! -d "/sys/bus/pci/devices/0000:01:00.0" ]] || \
+       ! cat "/sys/bus/pci/devices/0000:01:00.0/vendor" &>/dev/null; then
+        gpu_accessible=false
+        warn "GPU not accessible (may have fallen off the bus)"
+        log "Attempting PCIe SBR recovery before power-off..."
+        _pcie_bridge_sbr && gpu_accessible=true || true
+    fi
+
+    if [[ "$gpu_accessible" != "true" ]]; then
+        warn "GPU unreachable even after SBR — cannot power off safely."
+        warn "A full reboot is required to recover the GPU."
+        return 1
+    fi
+
     # Run eco mode — will fail gracefully if NVIDIA is in use
     local output
     output=$(timeout "$DGPU_TIMEOUT" "$DGPU_SWITCH" eco 2>&1) || true
@@ -116,6 +232,13 @@ apply_battery() {
     else
         log "  $output"
     fi
+
+    # dGPU is now powered off — unload NVIDIA kernel modules to free DRM
+    # so KWin doesn't block suspend with "atomic commit failed: Device or resource busy"
+    unload_nvidia_modules
+
+    # Disable NVIDIA suspend services — no point with dGPU off
+    disable_nvidia_services
 }
 
 apply_ac() {
@@ -147,6 +270,14 @@ apply_ac() {
     else
         log "  $output"
     fi
+
+    # dGPU is back — reload NVIDIA modules if they were unloaded
+    if ! lsmod | grep -q "^nvidia "; then
+        load_nvidia_modules
+    fi
+
+    # Re-enable NVIDIA suspend services — dGPU is on
+    enable_nvidia_services
 }
 
 main() {

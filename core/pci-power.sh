@@ -71,9 +71,9 @@ apply_battery() {
         local pci_addr
         pci_addr=$(echo "$pci_ctrl" | grep -oP '0000:[0-9a-f:.]+')
         
-        # Skip GPU slot to prevent D3cold wake issues with nvidia-open driver
+        # Skip GPU — nvidia driver manages its own PM state
         if [[ "$pci_addr" == "$GPU_PCI_ADDR" ]]; then
-            sysfs_write "$pci_ctrl" "on" "  PCI $pci_addr (GPU) → on (D3cold protection)"
+            log "  [skip] GPU $pci_addr — nvidia driver manages own PM"
         else
             sysfs_write "$pci_ctrl" "auto" "  PCI $pci_addr → auto"
         fi
