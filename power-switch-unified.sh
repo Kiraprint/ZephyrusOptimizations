@@ -154,6 +154,11 @@ show_status() {
         "$SCRIPT_DIR/core/gpu.sh" status
         echo ""
     fi
+
+    if [[ -x "$SCRIPT_DIR/core/nvidia-power-cap.sh" ]]; then
+        "$SCRIPT_DIR/core/nvidia-power-cap.sh" status
+        echo ""
+    fi
     
     if [[ -x "$SCRIPT_DIR/core/igpu-freq.sh" ]]; then
         "$SCRIPT_DIR/core/igpu-freq.sh" status
@@ -197,6 +202,9 @@ apply_battery() {
     log ""
     
     [[ -x "$SCRIPT_DIR/core/gpu.sh" ]] && timeout 60 "$SCRIPT_DIR/core/gpu.sh" battery || true
+    log ""
+    # Reset NVIDIA clock locks (GPU is D3cold anyway)
+    [[ -x "$SCRIPT_DIR/core/nvidia-power-cap.sh" ]] && timeout 10 "$SCRIPT_DIR/core/nvidia-power-cap.sh" battery || true
     log ""
     [[ -x "$SCRIPT_DIR/core/igpu-freq.sh" ]] && "$SCRIPT_DIR/core/igpu-freq.sh" battery || true
     log ""
@@ -278,6 +286,9 @@ apply_ac() {
     log ""
     
     [[ -x "$SCRIPT_DIR/core/gpu.sh" ]] && timeout 60 "$SCRIPT_DIR/core/gpu.sh" ac || true
+    log ""
+    # NVIDIA power cap unlock — must run AFTER gpu.sh (dGPU must be powered on)
+    [[ -x "$SCRIPT_DIR/core/nvidia-power-cap.sh" ]] && timeout 30 "$SCRIPT_DIR/core/nvidia-power-cap.sh" ac || true
     log ""
     [[ -x "$SCRIPT_DIR/core/igpu-freq.sh" ]] && "$SCRIPT_DIR/core/igpu-freq.sh" ac || true
     log ""
