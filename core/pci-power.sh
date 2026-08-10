@@ -70,10 +70,13 @@ apply_battery() {
         local pci_addr
         pci_addr=$(echo "$pci_ctrl" | grep -oP '0000:[0-9a-f:.]+')
         
-        # Skip GPU + its root port — nvidia driver manages own PM; bridge
-        # runtime-suspend with dGPU D3cold causes bus removal here
-        if [[ "$pci_addr" == "$GPU_PCI_ADDR" || "$pci_addr" == "$GPU_PCI_BRIDGE" ]]; then
-            log "  [skip] $pci_addr — GPU subtree (nvidia PM + platform D3cold quirk)"
+        # Skip the root port — keep it powered (its runtime-suspend was the
+        # suspect for subtree bus loss). The GPU itself goes to auto so it
+        # can D3cold (0W) on battery; udev cleanup handles the removal.
+        if [[ "$pci_addr" == "$GPU_PCI_BRIDGE" ]]; then
+            log "  [skip] $pci_addr — dGPU root port (keep powered)"
+        elif [[ "$pci_addr" == "$GPU_PCI_ADDR" ]]; then
+            sysfs_write "$pci_ctrl" "auto" "  GPU $pci_addr → auto (D3cold on idle)"
         else
             sysfs_write "$pci_ctrl" "auto" "  PCI $pci_addr → auto"
         fi

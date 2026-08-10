@@ -25,25 +25,6 @@ DGPU_SWITCH="/usr/local/bin/dgpu-switch.sh"
 # Cardwire — eBPF-based GPU access control (not power!)
 CARDWIRE_CMD="/usr/bin/cardwire"
 
-
-# --- NVIDIA module unloading (for clean suspend with dGPU off) ---------------
-NVIDIA_MODULES=("nvidia_drm" "nvidia_modeset" "nvidia_uvm" "nvidia" "nvidia_wmi_ec_backlight")
-
-load_nvidia_modules() {
-    log "  Loading NVIDIA kernel modules..."
-    if modprobe nvidia_drm 2>/dev/null; then
-        log "    [ok] NVIDIA modules loaded"
-    else
-        log "    [warn] NVIDIA modules failed to load — reboot may be needed"
-    fi
-}
-
-enable_nvidia_services() {
-    log "  Enabling NVIDIA services (dGPU is on)..."
-    systemctl enable --now nvidia-suspend.service nvidia-resume.service nvidia-hibernate.service 2>/dev/null
-    systemctl enable --now nvidia-powerd.service 2>/dev/null
-    log "    [ok] nvidia-suspend/resume/hibernate/powerd → enabled"
-}
 cardwire_available() {
     [[ -x "$CARDWIRE_CMD" ]] && systemctl is-active --quiet cardwired 2>/dev/null
 }
@@ -133,23 +114,14 @@ apply_ac() {
         return 0
     fi
 
-    # If the dGPU is not on the bus (D3cold removal / zombie driver), do NOT
-    # touch anything NVIDIA: cardwire mode switches restart nvidia-powerd,
-    # and NVML/RM access against the hot-removed device hangs the system
-    # (14:13:21 freeze). A reboot re-enumerates the GPU.
+    # nvidia-powerd and module lifecycle are NOT managed here: cardwire owns
+    # mode switching, and nvidia-powerd is guarded (see nvidia-powerd-guard)
+    # so restarts against an absent GPU are safe no-ops.
     if [[ ! -d "/sys/bus/pci/devices/0000:01:00.0" ]]; then
-        warn "dGPU not on the bus (D3cold removal) — skipping cardwire/nvidia management"
-        warn "Reboot to restore the dGPU"
-        return 0
+        warn "dGPU not on the bus (D3cold removal) — returns after reboot"
     fi
 
     cardwire_set_mode "hybrid"
-
-    if ! lsmod | grep -q "^nvidia "; then
-        load_nvidia_modules
-    fi
-
-    enable_nvidia_services
 }
 
 main() {

@@ -1,0 +1,7 @@
+# dgpu-cleanup.rules — clean up the NVIDIA driver when the dGPU is removed
+# from the bus by the platform (ASUS D3cold power-off).
+#
+# Install to: /etc/udev/rules.d/90-dgpu-cleanup.rules
+# Requires:   /usr/local/bin/dgpu-cleanup.sh (installed by
+#             install-udev-autoswitching.sh)
+ACTION=="remove", SUBSYSTEM=="pci", KERNEL=="0000:01:00.0", RUN+="/usr/local/bin/dgpu-cleanup.sh"

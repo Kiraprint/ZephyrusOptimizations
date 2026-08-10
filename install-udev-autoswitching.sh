@@ -52,22 +52,37 @@ echo "  ✓ Udev rule installed"
 echo ""
 
 # Step 4: Reload udev
-echo "[4/4] Reloading udev rules..."
+echo "[4/7] Reloading udev rules..."
 udevadm control --reload-rules
 udevadm trigger
 echo "  ✓ Udev reloaded"
 echo ""
 
-# Step 5: Install scx_lavd scheduler unit (used by AC mode)
-echo "[5/6] Installing scx_lavd scheduler unit..."
+# Step 5: Install dGPU cleanup + nvidia-powerd guard (D3cold safety)
+echo "[5/7] Installing dGPU D3cold cleanup + nvidia-powerd guard..."
+cp "$SCRIPT_DIR/dgpu-cleanup.sh" /usr/local/bin/dgpu-cleanup
+chmod +x /usr/local/bin/dgpu-cleanup
+cp "$SCRIPT_DIR/nvidia-powerd-guard.sh" /usr/local/bin/nvidia-powerd-guard
+chmod +x /usr/local/bin/nvidia-powerd-guard
+cp "$SCRIPT_DIR/90-dgpu-cleanup.rules" /etc/udev/rules.d/
+mkdir -p /etc/systemd/system/nvidia-powerd.service.d
+cp "$SCRIPT_DIR/nvidia-powerd-guard.conf" /etc/systemd/system/nvidia-powerd.service.d/guard.conf
+systemctl daemon-reload
+udevadm control --reload-rules
+echo "  ✓ dGPU cleanup rule + nvidia-powerd guard installed"
+echo "    (D3cold removal unloads the nvidia driver; powerd restarts are safe no-ops)"
+echo ""
+
+# Step 6: Install scx_lavd scheduler unit (used by AC mode)
+echo "[6/7] Installing scx_lavd scheduler unit..."
 cp "$SCRIPT_DIR/zephyrus-scx-lavd.service" /etc/systemd/system/
 systemctl daemon-reload
 echo "  ✓ scx_lavd unit installed (started on AC, stopped on battery)"
 echo ""
 
-# Step 6: Install boot service (optional)
+# Step 7: Install boot service (optional)
 if [[ "$INSTALL_BOOT_SERVICE" == "yes" ]]; then
-    echo "[6/6] Installing boot-time power management service..."
+    echo "[7/7] Installing boot-time power management service..."
     cp "$SCRIPT_DIR/zephyrus-power-boot.service" /etc/systemd/system/
     systemctl daemon-reload
     systemctl enable zephyrus-power-boot.service
