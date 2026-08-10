@@ -15,8 +15,9 @@
 set -uo pipefail
 
 if [[ ! -d "/sys/bus/pci/devices/0000:01:00.0" ]]; then
-    # dGPU not on the bus — do not start nvidia-powerd; exit cleanly so
-    # systemd Restart=on-failure does not loop.
+    # dGPU not on the bus — do not start nvidia-powerd; exit cleanly.
+    # The systemd drop-in sets RestartPreventExitStatus=0, so this clean
+    # exit is never respawned even if other drop-ins force Restart=always.
     exit 0
 fi
 
