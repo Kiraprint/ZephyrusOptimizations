@@ -65,9 +65,8 @@ case "${1:-status}" in
     watch)
         enable_trace
         log "=== watcher started (pid $$) ==="
-        local last=""
+        last=""
         while true; do
-            local now
             now="$(ac)|$(present)|$(draw)|$(cardwire get 2>/dev/null | head -1)"
             if [[ "$now" != "$last" ]]; then
                 dump_state "change detected"
