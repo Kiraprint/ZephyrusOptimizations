@@ -8,6 +8,14 @@
 # dGPU at all: no dgpu_disable writes, no cardwire calls, no PCIe
 # power/control, no module/service management. It only reports status.
 #
+# REQUIRED: NVreg_DynamicPowerManagement=0x00 (kernel cmdline, set in
+# /etc/limine-entry-tool.d/fix_brightness.conf). With 0x02 (fine-grained)
+# the driver internally attempts D3cold the moment the GPU is clientless —
+# every cardwire mode switch restarts nvidia-powerd, whose fd close creates
+# exactly that idle moment, and on this platform (no _PR3 on the root port)
+# D3cold = bus removal: communication dies, driver freezes in "D0".
+# 0x00 keeps the device on the bus; cardwire's eBPF block still gates access.
+#
 # Test independently:
 #   sudo ./gpu.sh battery      # no-op (cardwire handles the dGPU)
 #   sudo ./gpu.sh ac           # no-op (cardwire handles the dGPU)
