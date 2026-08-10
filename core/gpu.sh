@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # =============================================================================
-# gpu.sh — GPU power management for ASUS ROG Zephyrus G16 (RTX 5090)
+# gpu.sh — dGPU access control for ASUS ROG Zephyrus G16 (RTX 5090)
 #
-# Power mechanism: NVIDIA runtime D3 (NVreg_DynamicPowerManagement=0x02).
-# The driver suspends the dGPU (D3/D3cold) when idle; cardwire blocks access
-# on battery so nothing wakes it. Firmware dgpu_disable (ASUS EC power cut)
-# is intentionally NOT used — it removes the device from the bus and needs
-# a reboot to restore (see PLAN.md: D3cold wake bug, RTX 5090 + nvidia-open).
+# The dGPU's power state is cardwire's job (block on battery -> the driver
+# runtime-suspends it; hybrid on AC). This module only asks cardwire for the
+# mode and reports status. It deliberately does NOT write dgpu_disable, does
+# NOT set PCIe power/control and does NOT unload nvidia modules — removing
+# or forcing the dGPU off the bus on battery costs power, not saves it.
 #
 # Test independently:
-#   sudo ./gpu.sh battery      # Block dGPU access (idles into D3)
-#   sudo ./gpu.sh ac           # Restore dGPU access (hybrid)
+#   sudo ./gpu.sh battery      # cardwire integrated (dGPU idles into D3cold)
+#   sudo ./gpu.sh ac           # cardwire hybrid (dGPU available for ML/gaming)
 #   ./gpu.sh status            # Show current state
 # =============================================================================
 
@@ -79,30 +79,26 @@ show_status() {
 
     echo ""
     echo "Management:"
-    echo "  battery    → cardwire integrated (dGPU sleeps via runtime D3)"
-    echo "  ac         → cardwire hybrid (dGPU available)"
+    echo "  battery    → cardwire integrated (dGPU idles into D3cold)"
+    echo "  ac         → cardwire hybrid (dGPU available for ML/gaming)"
 }
 
 apply_battery() {
-    log "=== Battery: dGPU runtime D3 (no firmware dgpu_disable) ==="
+    log "=== Battery: dGPU D3cold via cardwire (no removal, no eco) ==="
 
     if [[ "$DRY_RUN" == "true" ]]; then
-        log "  [dry-run] Would set cardwire integrated (block access, allow D3)"
+        log "  [dry-run] Would set cardwire integrated (block access -> D3cold)"
         return 0
     fi
 
-    # Power mechanism is NVIDIA runtime D3 (NVreg_DynamicPowerManagement):
-    # the driver suspends the GPU when idle. Firmware dgpu_disable (ASUS EC
-    # power cut) is intentionally NOT used — on this platform it removes the
-    # device from the bus and needs a reboot to restore.
-    # Keep the nvidia modules + services loaded so runtime PM stays active.
+    # Power state is cardwire's part: blocking access lets the driver
+    # runtime-suspend the dGPU (D3cold). This script must NOT write
+    # dgpu_disable or touch PCIe power — removing the dGPU on battery
+    # costs ~20W (device leaves the bus but the rail stays powered).
     if [[ ! -d "/sys/bus/pci/devices/0000:01:00.0" ]]; then
-        warn "GPU not present on the bus — check journal for D3cold removal"
-    else
-        log "  [ok] GPU present — will enter D3 when idle (Video Memory: Off)"
+        warn "dGPU not on the bus — check cardwire/journal for what happened"
     fi
 
-    # Block dGPU access so nothing wakes it; it then idles into D3
     cardwire_set_mode "integrated"
 }
 
@@ -110,15 +106,14 @@ apply_ac() {
     log "=== AC: dGPU available (Hybrid) ==="
 
     if [[ "$DRY_RUN" == "true" ]]; then
-        log "  [dry-run] Would set cardwire hybrid (restore dGPU access)"
+        log "  [dry-run] Would set cardwire hybrid (dGPU available)"
         return 0
     fi
 
-    # nvidia-powerd and module lifecycle are NOT managed here: cardwire owns
-    # mode switching, and nvidia-powerd is guarded (see nvidia-powerd-guard)
-    # so restarts against an absent GPU are safe no-ops.
+    # Same rule as battery: cardwire owns the dGPU. No dgpu-switch standard,
+    # no service management — restoring the GPU is cardwire's + reboot's job.
     if [[ ! -d "/sys/bus/pci/devices/0000:01:00.0" ]]; then
-        warn "dGPU not on the bus (D3cold removal) — returns after reboot"
+        warn "dGPU not on the bus — it returns on the next reboot"
     fi
 
     cardwire_set_mode "hybrid"
@@ -139,8 +134,8 @@ main() {
         *)
             echo "Usage: $0 {battery|ac|status} [--dry-run]"
             echo ""
-            echo "  battery    Block dGPU access (idles into runtime D3)"
-            echo "  ac         Restore dGPU access (hybrid)"
+            echo "  battery    cardwire integrated (dGPU idles into D3cold)"
+            echo "  ac         cardwire hybrid (dGPU available)"
             echo "  status     Show current GPU power state"
             exit 1
             ;;

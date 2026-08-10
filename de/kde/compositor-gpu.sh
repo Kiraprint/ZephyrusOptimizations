@@ -40,17 +40,17 @@ show_status() {
     local user_home
     user_home=$(get_user_home "$display_user")
     local kde_env_dir="$user_home/.config/plasma-workspace/env"
-    local gpu_env_file="$kde_env_dir/gpu-battery.sh"
+    local gpu_env_file="$kde_env_dir/gpu-kwin.sh"
     
     # Check if env file exists
     if [[ -f "$gpu_env_file" ]]; then
-        echo "GPU isolation: ACTIVE (iGPU forced)"
+        echo "GPU isolation: ACTIVE (permanent — KWin uses iGPU on AC and battery)"
         echo "  User: $display_user"
         echo "  File: $gpu_env_file"
         echo "  Contents:"
         cat "$gpu_env_file" | sed 's/^/    /'
     else
-        echo "GPU isolation: INACTIVE (automatic selection)"
+        echo "GPU isolation: INACTIVE (isolation file missing — run battery or ac once)"
         echo "  User: $display_user"
     fi
     
@@ -79,42 +79,32 @@ show_status() {
     echo "Note: Changes to GPU isolation require logout/login to take effect"
 }
 
-apply_battery() {
-    log "=== Applying battery compositor GPU settings ==="
-    
-    # Detect display user
-    local display_user
-    display_user=$(detect_display_user)
-    
-    if [[ -z "$display_user" ]]; then
-        warn "Cannot detect display user"
-        return 1
-    fi
-    
+# Write the permanent KWin iGPU isolation env file — applies on AC AND battery.
+# KWin must never open the dGPU render node / EGL ICD; the dGPU is reserved
+# for explicit ML/CUDA/Vulkan workloads (launched via prime-run etc).
+write_isolation_file() {
+    local display_user="$1"
     local user_home
     user_home=$(get_user_home "$display_user")
     local kde_env_dir="$user_home/.config/plasma-workspace/env"
-    local gpu_env_file="$kde_env_dir/gpu-battery.sh"
-    
-    # Create KDE env directory if needed
+    local gpu_env_file="$kde_env_dir/gpu-kwin.sh"
+
     if [[ ! -d "$kde_env_dir" ]]; then
         if [[ "$DRY_RUN" == "true" ]]; then
             log "  [dry-run] Would create directory: $kde_env_dir"
-        else
-            # Create as the actual user
-            if [[ "$EUID" -eq 0 ]]; then
-                sudo -u "$display_user" mkdir -p "$kde_env_dir"
-            else
-                mkdir -p "$kde_env_dir"
-            fi
-            log "  [ok] Created directory: $kde_env_dir"
+            return 0
         fi
+        if [[ "$EUID" -eq 0 ]]; then
+            sudo -u "$display_user" mkdir -p "$kde_env_dir"
+        else
+            mkdir -p "$kde_env_dir"
+        fi
+        log "  [ok] Created directory: $kde_env_dir"
     fi
-    
-    # Create env file to force iGPU
+
     local env_content='#!/usr/bin/env bash
-# Force KDE compositor and session to use Intel iGPU (battery mode)
-# Prevents the NVIDIA dGPU from waking (glvnd EGL ICD + KWin GpuManager)
+# Force KWin + KDE session to use only the Intel iGPU (always: AC and battery).
+# The NVIDIA dGPU stays reserved for explicit ML/CUDA/Vulkan workloads.
 # Ref: KDE bug 521814/521914, cardwire sleep diagnostics
 
 export __GLX_VENDOR_LIBRARY_NAME=mesa
@@ -130,72 +120,65 @@ export KWIN_DISABLE_VULKAN=1
 export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
 
 # Verify variables are set
-echo "[compositor-gpu] Battery mode: Forcing iGPU (mesa EGL + renderD128)" >&2
+echo "[compositor-gpu] Forcing iGPU (mesa EGL, render node via by-path)" >&2
 '
-    
+
     if [[ "$DRY_RUN" == "true" ]]; then
         log "  [dry-run] Would create: $gpu_env_file"
         log "  [dry-run] Contents:"
         echo "$env_content" | sed 's/^/    /'
-    else
-        if [[ "$EUID" -eq 0 ]]; then
-            # Write as root then chown
-            echo "$env_content" > "$gpu_env_file"
-            chown "$display_user:$display_user" "$gpu_env_file"
-            chmod +x "$gpu_env_file"
-        else
-            echo "$env_content" > "$gpu_env_file"
-            chmod +x "$gpu_env_file"
-        fi
-        log "  [ok] Created GPU isolation script: $gpu_env_file"
-        log "  [ok] Owner: $display_user, Mode: executable"
+        return 0
     fi
-    
-    log ""
-    log "Battery compositor GPU settings applied"
-    log "⚠️  IMPORTANT: You must logout and login for changes to take effect"
-    log ""
-    log "To verify after logout:"
-    log "  echo \$__GLX_VENDOR_LIBRARY_NAME  # Should show: mesa"
-    log "  echo \$DRI_PRIME                  # Should show: 0"
-    log "  echo \$KWIN_RENDER_NODES          # Should show: /dev/dri/renderD12x (dynamic)"
-    log "  echo \$__EGL_VENDOR_LIBRARY_FILENAMES  # Should show: .../50_mesa.json"
+
+    if [[ "$EUID" -eq 0 ]]; then
+        echo "$env_content" > "$gpu_env_file"
+        chown "$display_user:$display_user" "$gpu_env_file"
+    else
+        echo "$env_content" > "$gpu_env_file"
+    fi
+    chmod +x "$gpu_env_file"
+    # Remove the old battery-only toggle (pre-permanent-isolation)
+    rm -f "$kde_env_dir/gpu-battery.sh"
+    log "  [ok] iGPU isolation active: $gpu_env_file"
 }
 
-apply_ac() {
-    log "=== Applying AC compositor GPU settings ==="
-    
-    # Detect display user
+apply_battery() {
+    log "=== Applying compositor GPU settings (battery) ==="
+
     local display_user
     display_user=$(detect_display_user)
-    
+
     if [[ -z "$display_user" ]]; then
         warn "Cannot detect display user"
         return 1
     fi
-    
-    local user_home
-    user_home=$(get_user_home "$display_user")
-    local gpu_env_file="$user_home/.config/plasma-workspace/env/gpu-battery.sh"
-    
-    # Remove env file to allow automatic GPU selection
-    if [[ -f "$gpu_env_file" ]]; then
-        if [[ "$DRY_RUN" == "true" ]]; then
-            log "  [dry-run] Would remove: $gpu_env_file"
-        else
-            rm -f "$gpu_env_file"
-            log "  [ok] Removed GPU isolation script: $gpu_env_file"
-        fi
-    else
-        log "  [skip] GPU isolation already inactive"
-    fi
-    
+
+    write_isolation_file "$display_user"
+
     log ""
-    log "AC compositor GPU settings applied"
+    log "Battery compositor GPU settings applied (isolation is permanent)"
     log "⚠️  IMPORTANT: You must logout and login for changes to take effect"
+}
+
+apply_ac() {
+    log "=== Applying AC compositor GPU settings (iGPU stays) ==="
+
+    local display_user
+    display_user=$(detect_display_user)
+
+    if [[ -z "$display_user" ]]; then
+        warn "Cannot detect display user"
+        return 1
+    fi
+
+    # Isolation is permanent by design: KWin never touches the dGPU on AC
+    # either. The dGPU remains available for explicit ML/gaming workloads
+    # (prime-run / Vulkan) — it just is not used for desktop compositing.
+    write_isolation_file "$display_user"
+
     log ""
-    log "After logout, compositor will use automatic GPU selection"
-    log "(typically dGPU for better performance, or iGPU if dGPU is suspended)"
+    log "AC compositor GPU settings applied (isolation stays active)"
+    log "⚠️  IMPORTANT: You must logout and login for changes to take effect"
 }
 
 main() {

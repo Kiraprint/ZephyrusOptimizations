@@ -94,11 +94,17 @@ apply_ac() {
     log "  [info] policy: $(cat /sys/module/pcie_aspm/parameters/policy 2>/dev/null) (boot-time only)"
 
     log ""
-    log "--- PCI Runtime PM → on (lowest latency) ---"
+    log "--- PCI Runtime PM → on (lowest latency, GPU subtree untouched) ---"
     for pci_ctrl in /sys/bus/pci/devices/*/power/control; do
         local pci_addr
         pci_addr=$(echo "$pci_ctrl" | grep -oP '0000:[0-9a-f:.]+')
-        sysfs_write "$pci_ctrl" "on" "  PCI $pci_addr → on"
+
+        # Never touch the dGPU subtree — cardwire + the nvidia driver own it
+        if [[ "$pci_addr" == "$GPU_PCI_ADDR" || "$pci_addr" == "$GPU_PCI_BRIDGE" ]]; then
+            log "  [skip] $pci_addr — dGPU subtree (cardwire/nvidia own PM)"
+        else
+            sysfs_write "$pci_ctrl" "on" "  PCI $pci_addr → on"
+        fi
     done
     
     log ""
