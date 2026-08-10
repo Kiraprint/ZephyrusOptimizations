@@ -1,0 +1,11 @@
+[Unit]
+Description=Zephyrus scx_lavd CPU scheduler (AC gaming)
+# Started on demand by core/kernel-tunables.sh (AC mode), stopped on battery.
+# NOT enabled: the power scripts own its lifecycle. Must run in its own unit —
+# backgrounding inside systemd-run transient units gets cgroup-reaped on exit.
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/scx_lavd --performance
+TimeoutStopSec=15
+Restart=no

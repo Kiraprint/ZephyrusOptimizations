@@ -55,15 +55,10 @@ apply_battery() {
     require_root
     log "=== Applying battery PCI power settings ==="
     
-    # PCIe ASPM
+    # ASPM policy is boot-time-only since kernel 7.1 (runtime sysfs interface
+    # removed). Boot default comes from /etc/limine-entry-tool.d/aspm.conf.
     log "--- PCIe ASPM ---"
-    local aspm_policy="/sys/module/pcie_aspm/parameters/policy"
-    if [[ -w "$aspm_policy" ]]; then
-        # Note: This may fail if ASPM is set via kernel cmdline (read-only despite -w check)
-        sysfs_write "$aspm_policy" "powersupersave" "PCIe ASPM → powersupersave" || true
-    else
-        log "  [skip] PCIe ASPM: read-only (set via kernel cmdline pcie_aspm.policy=powersupersave)"
-    fi
+    log "  [info] policy: $(cat /sys/module/pcie_aspm/parameters/policy 2>/dev/null) (boot-time only)"
 
     log ""
     log "--- PCI Runtime PM → auto (excluding GPU) ---"
@@ -88,12 +83,7 @@ apply_ac() {
     log "=== Applying AC PCI power settings ==="
     
     log "--- PCIe ASPM ---"
-    local aspm_policy="/sys/module/pcie_aspm/parameters/policy"
-    if [[ -w "$aspm_policy" ]]; then
-        sysfs_write "$aspm_policy" "performance" "PCIe ASPM → performance (gaming/ML)"
-    else
-        log "  [skip] PCIe ASPM: read-only (set via kernel cmdline)"
-    fi
+    log "  [info] policy: $(cat /sys/module/pcie_aspm/parameters/policy 2>/dev/null) (boot-time only)"
 
     log ""
     log "--- PCI Runtime PM → on (lowest latency) ---"
@@ -109,6 +99,9 @@ apply_ac() {
 
 main() {
     local mode
+    for arg in "$@"; do
+        [[ "$arg" == "--dry-run" ]] && DRY_RUN="true" && export DRY_RUN && break
+    done
     mode=$(parse_module_args "$@")
     
     case "$mode" in
@@ -118,8 +111,8 @@ main() {
         *)
             echo "Usage: $0 {battery|ac|status} [--dry-run]"
             echo ""
-            echo "  battery    ASPM powersupersave, runtime PM auto (GPU excluded)"
-            echo "  ac         ASPM default, runtime PM on (all devices)"
+            echo "  battery    Runtime PM auto (GPU excluded)"
+            echo "  ac         Runtime PM on (all devices)"
             echo "  status     Show current PCI power settings"
             exit 1
             ;;

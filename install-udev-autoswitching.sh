@@ -58,9 +58,16 @@ udevadm trigger
 echo "  ✓ Udev reloaded"
 echo ""
 
-# Step 5: Install boot service (optional)
+# Step 5: Install scx_lavd scheduler unit (used by AC mode)
+echo "[5/6] Installing scx_lavd scheduler unit..."
+cp "$SCRIPT_DIR/zephyrus-scx-lavd.service" /etc/systemd/system/
+systemctl daemon-reload
+echo "  ✓ scx_lavd unit installed (started on AC, stopped on battery)"
+echo ""
+
+# Step 6: Install boot service (optional)
 if [[ "$INSTALL_BOOT_SERVICE" == "yes" ]]; then
-    echo "[5/5] Installing boot-time power management service..."
+    echo "[6/6] Installing boot-time power management service..."
     cp "$SCRIPT_DIR/zephyrus-power-boot.service" /etc/systemd/system/
     systemctl daemon-reload
     systemctl enable zephyrus-power-boot.service

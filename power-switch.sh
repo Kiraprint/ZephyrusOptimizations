@@ -496,14 +496,7 @@ apply_battery() {
 
     log ""
 
-    # 8. PCIe ASPM — try to set powersupersave (may be locked at boot)
-    log "--- PCIe ASPM ---"
-    local aspm_policy="/sys/module/pcie_aspm/parameters/policy"
-    if [[ -w "$aspm_policy" ]]; then
-        sysfs_write "$aspm_policy" "powersupersave" "PCIe ASPM → powersupersave"
-    else
-        log "  [skip] PCIe ASPM: read-only (set via kernel cmdline pcie_aspm.policy=powersupersave)"
-    fi
+    # 8. PCIe ASPM: boot-time-only since kernel 7.1, set via limine-entry-tool.d
 
     # 9. PCI Runtime PM — set all devices to "auto" EXCEPT GPU (D3cold wake protection)
     log "--- PCI Runtime PM → auto (excluding GPU) ---"
@@ -652,14 +645,7 @@ apply_ac() {
 
     log ""
 
-    # 10. PCIe ASPM — try to set default (may be locked at boot)
-    log "--- PCIe ASPM ---"
-    local aspm_policy="/sys/module/pcie_aspm/parameters/policy"
-    if [[ -w "$aspm_policy" ]]; then
-        sysfs_write "$aspm_policy" "default" "PCIe ASPM → default"
-    else
-        log "  [skip] PCIe ASPM: read-only (set via kernel cmdline)"
-    fi
+    # 10. PCIe ASPM: boot-time-only since kernel 7.1, set via limine-entry-tool.d
 
     # 8. PCI Runtime PM — set all devices to "on" (always active, lowest latency)
     log "--- PCI Runtime PM → on ---"

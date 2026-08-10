@@ -199,6 +199,9 @@ apply_battery() {
     [[ -x "$SCRIPT_DIR/core/gpu.sh" ]] && timeout 60 "$SCRIPT_DIR/core/gpu.sh" battery || true
     log ""
     [[ -x "$SCRIPT_DIR/core/igpu-freq.sh" ]] && "$SCRIPT_DIR/core/igpu-freq.sh" battery || true
+
+    [[ -x "$SCRIPT_DIR/core/nvidia-power-cap.sh" ]] && "$SCRIPT_DIR/core/nvidia-power-cap.sh" battery || true
+    log ""
     log ""
     
     
@@ -280,6 +283,9 @@ apply_ac() {
     [[ -x "$SCRIPT_DIR/core/gpu.sh" ]] && timeout 60 "$SCRIPT_DIR/core/gpu.sh" ac || true
     log ""
     [[ -x "$SCRIPT_DIR/core/igpu-freq.sh" ]] && "$SCRIPT_DIR/core/igpu-freq.sh" ac || true
+    log ""
+
+    [[ -x "$SCRIPT_DIR/core/nvidia-power-cap.sh" ]] && timeout 60 "$SCRIPT_DIR/core/nvidia-power-cap.sh" ac || true
     log ""
     
     

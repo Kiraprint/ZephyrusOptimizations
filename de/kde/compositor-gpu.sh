@@ -113,14 +113,24 @@ apply_battery() {
     
     # Create env file to force iGPU
     local env_content='#!/usr/bin/env bash
-# Force KDE compositor to use Intel iGPU (battery mode)
-# This prevents the NVIDIA dGPU from waking up during compositing
+# Force KDE compositor and session to use Intel iGPU (battery mode)
+# Prevents the NVIDIA dGPU from waking (glvnd EGL ICD + KWin GpuManager)
+# Ref: KDE bug 521814/521914, cardwire sleep diagnostics
 
 export __GLX_VENDOR_LIBRARY_NAME=mesa
 export DRI_PRIME=0
 
+# KWin 6.7 GpuManager: restrict direct render-node opens to the iGPU only.
+# Resolved dynamically — DRM minor numbers (renderD12x) swap across boots,
+# by-path is PCI-address-stable.
+export KWIN_RENDER_NODES=$(readlink -f /dev/dri/by-path/pci-0000:00:02.0-render)
+# Stop the Vulkan device scan that wakes the dGPU (Vulkan can bypass KWIN_RENDER_NODES)
+export KWIN_DISABLE_VULKAN=1
+# Load only the Mesa EGL ICD -> libEGL_nvidia never dlopened -> /dev/nvidiactl never opened
+export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
+
 # Verify variables are set
-echo "[compositor-gpu] Battery mode: Forcing iGPU (DRI_PRIME=0)" >&2
+echo "[compositor-gpu] Battery mode: Forcing iGPU (mesa EGL + renderD128)" >&2
 '
     
     if [[ "$DRY_RUN" == "true" ]]; then
@@ -148,6 +158,8 @@ echo "[compositor-gpu] Battery mode: Forcing iGPU (DRI_PRIME=0)" >&2
     log "To verify after logout:"
     log "  echo \$__GLX_VENDOR_LIBRARY_NAME  # Should show: mesa"
     log "  echo \$DRI_PRIME                  # Should show: 0"
+    log "  echo \$KWIN_RENDER_NODES          # Should show: /dev/dri/renderD12x (dynamic)"
+    log "  echo \$__EGL_VENDOR_LIBRARY_FILENAMES  # Should show: .../50_mesa.json"
 }
 
 apply_ac() {
@@ -188,6 +200,9 @@ apply_ac() {
 
 main() {
     local mode
+    for arg in "$@"; do
+        [[ "$arg" == "--dry-run" ]] && DRY_RUN="true" && export DRY_RUN && break
+    done
     mode=$(parse_module_args "$@")
     
     case "$mode" in

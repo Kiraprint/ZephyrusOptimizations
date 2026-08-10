@@ -51,12 +51,37 @@ _read_sysfs() {
 
 enable_persistence_mode() {
     log "  Enabling NVIDIA persistence mode..."
-    if _nvidia_smi -pm 1; then
-        log "    [ok] persistence mode enabled"
-    else
-        warn "    persistence mode failed (GPU may be D3cold)"
+    # GPU may be in D3cold at boot — retry until it responds
+    local pm_before=""
+    for attempt in 1 2 3 4 5; do
+        if _nvidia_smi --query-gpu=persistence_mode --format=csv,noheader 2>/dev/null | head -1 | grep -qi enabled; then
+            pm_before="enabled"
+            break
+        fi
+        if _nvidia_smi -pm 1 2>/dev/null; then
+            pm_before="disabled"
+            break
+        fi
+        warn "    attempt $attempt: GPU not responding (D3cold?) — retrying in 5s"
+        sleep 5
+    done
+    if [[ -z "$pm_before" ]]; then
+        warn "    persistence mode failed after 5 attempts"
         return 1
     fi
+    # Force renegotiation: toggle persistence mode (disable -> enable)
+    # so the driver re-reads the power budget from the VBIOS.
+    if [[ "$pm_before" == "enabled" ]]; then
+        log "    persistence already enabled — toggling to force power renegotiation"
+        _nvidia_smi -pm 0 2>/dev/null
+        sleep 1
+    fi
+    if _nvidia_smi -pm 1 2>/dev/null; then
+        log "    [ok] persistence mode enabled (power budget renegotiated)"
+        return 0
+    fi
+    warn "    persistence mode failed to re-enable"
+    return 1
 }
 
 set_armoury_tgp() {
@@ -99,9 +124,9 @@ unlock_clocks() {
 trigger_power_renegotiation() {
     log "  Triggering power budget renegotiation..."
     local before after
-    before=$(_nvidia_smi --query-gpu=power.limit --format=csv,noheader 2>/dev/null | head -1 || echo "?")
+    before=$(_nvidia_smi --query-gpu=power.limit --format=csv,noheader 2>/dev/null | head -1 | sed "s| MHz||" || echo "?")
     _nvidia_smi -pm 1 &>/dev/null
-    after=$(_nvidia_smi --query-gpu=power.limit --format=csv,noheader 2>/dev/null | head -1 || echo "?")
+    after=$(_nvidia_smi --query-gpu=power.limit --format=csv,noheader 2>/dev/null | head -1 | sed "s| MHz||" || echo "?")
     log "    power limit: $before → $after"
 }
 
@@ -113,12 +138,12 @@ apply_ac() {
         log "  [dry-run] Would enable persistence mode, lock clocks, renegotiate"
         return 0
     fi
-    # 1. Reset clocks to clear any stale locked state
-    unlock_clocks
-    # 2. Push EC TGP attributes (essential for renegotiation)
+    # 1. Push EC TGP attributes (works even while GPU is D3cold)
     set_armoury_tgp
-    # 3. Enable persistence mode (required for renegotiation)
+    # 2. Enable persistence mode (retries until GPU wakes from D3cold)
     enable_persistence_mode || return 1
+    # 3. Reset clocks to clear any stale locked state
+    unlock_clocks
     # 4. Lock clocks for max throughput
     lock_clocks_ac
     # 5. Trigger power budget renegotiation
@@ -143,9 +168,11 @@ show_status() {
     vbios_max="?"
     driver_current="?"
     if _nvidia_smi -q -d POWER &>/dev/null; then
-        vbios_max=$(_nvidia_smi -q -d POWER 2>/dev/null | grep "Max Power Limit" | head -1 | awk '{print $5}')
-        driver_current=$(_nvidia_smi --query-gpu=power.limit --format=csv,noheader 2>/dev/null | head -1 | tr -d ' W')
-        [[ -z "$driver_current" || "$driver_current" == "[N/A]" ]] && driver_current="?"
+        local power_info
+        power_info=$(_nvidia_smi -q -d POWER 2>/dev/null)
+        vbios_max=$(echo "$power_info" | grep "Max Power Limit" | head -1 | awk '{print $5}')
+        driver_current=$(echo "$power_info" | grep -A1 "GPU Ceiling" | grep "Current Power" | awk '{print $5}' | tr -d " W")
+        [[ -z "$driver_current" || "$driver_current" == "N/A" ]] && driver_current="?"
     fi
     ec_nv_tgp=$(_read_sysfs nv_tgp)
     ec_base=$(_read_sysfs nv_base_tgp)
@@ -156,7 +183,7 @@ show_status() {
     echo "  EC nv_base_tgp  : ${ec_base}W"
     echo "  EC dyn_boost    : ${ec_boost}W"
     if [[ "$vbios_max" != "?" && "$driver_current" != "?" ]]; then
-        local gap=$((vbios_max - driver_current))
+        local gap=$(( ${vbios_max%%.*} - ${driver_current%%.*} ))
         if [[ "$gap" -gt 0 ]]; then
             echo "  Headroom left   : ${gap}W"
         elif [[ "$gap" -eq 0 ]]; then
@@ -164,11 +191,11 @@ show_status() {
         fi
     fi
     local pm
-    pm=$(_nvidia_smi --query-gpu=persistence_mode --format=csv,noheader 2>/dev/null | head -1 || echo "?")
+    pm=$(_nvidia_smi --query-gpu=persistence_mode --format=csv,noheader 2>/dev/null | head -1 | sed "s| MHz||" || echo "?")
     echo "  Persistence     : ${pm}"
     local gpu_clock mem_clock
-    gpu_clock=$(_nvidia_smi --query-gpu=clocks.current.graphics --format=csv,noheader 2>/dev/null | head -1 || echo "?")
-    mem_clock=$(_nvidia_smi --query-gpu=clocks.current.memory --format=csv,noheader 2>/dev/null | head -1 || echo "?")
+    gpu_clock=$(_nvidia_smi --query-gpu=clocks.current.graphics --format=csv,noheader 2>/dev/null | head -1 | sed "s| MHz||" || echo "?")
+    mem_clock=$(_nvidia_smi --query-gpu=clocks.current.memory --format=csv,noheader 2>/dev/null | head -1 | sed "s| MHz||" || echo "?")
     echo "  GPU clock       : ${gpu_clock} MHz"
     echo "  Mem clock       : ${mem_clock} MHz"
 }

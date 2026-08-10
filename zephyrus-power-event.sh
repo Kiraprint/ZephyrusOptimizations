@@ -10,7 +10,9 @@
 # Make executable: chmod +x /usr/local/bin/zephyrus-power-event
 # =============================================================================
 
-set -euo pipefail
+# No `set -e`: this dispatcher must deliver a power-mode switch even if
+# individual helpers (pgrep, env extraction) fail.
+set -uo pipefail
 
 POWER_SCRIPT="/home/kir/Code/ZephyrusOptimizations/power-switch-unified.sh"
 LOG_FILE="/var/log/zephyrus-power.log"
@@ -41,7 +43,7 @@ ENV_FLAGS=()
 desktop_pid=""
 
 for proc in plasmashell gnome-shell Xwayland; do
-    desktop_pid=$(pgrep -u "$DISPLAY_USER" -x "$proc" 2>/dev/null | head -1)
+    desktop_pid=$(pgrep -u "$DISPLAY_USER" -x "$proc" 2>/dev/null | head -1) || true
     [[ -n "$desktop_pid" ]] && break
 done
 

@@ -12,7 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 LOG_PREFIX="[cpu-cores]"
 
-# Core offlining DISABLED - Intel Thread Director + RAPL is more efficient
+# Core offlining DISABLED - Intel Thread Director + EPP is more efficient
 # Testing showed offlining cores doesn't save power on Arrow Lake due to:
 #   1. Idle cores already in deep C-states (near 0W)  
 #   2. Scheduler overhead increases with fewer cores
@@ -45,17 +45,16 @@ show_status() {
     echo "  E-cores (Skymont)    : cpu6-13  (max 4500 MHz)"
     echo "  LP E-cores           : cpu14-15 (max 2500 MHz)"
     echo ""
-    echo "Note: Core offlining disabled - RAPL + Thread Director is more efficient"
+    echo "Note: Core offlining disabled - offlining caused freezes, no power saved"
 }
 
 apply_battery() {
     log "=== CPU cores for battery mode ==="
     log "  [info] All 16 cores stay online"
-    log "  [info] Intel Thread Director + RAPL cap is more power-efficient"
+    log "  [info] Intel Thread Director is more power-efficient"
     log "  [info] than manual core offlining on Arrow Lake"
     log ""
     log "Power savings come from:"
-    log "  - RAPL package power limit (cpu-power module)"
     log "  - EPP = power (cpu-power module)"
     log "  - Turbo disabled (cpu-power module)"
 }
@@ -67,6 +66,9 @@ apply_ac() {
 
 main() {
     local mode
+    for arg in "$@"; do
+        [[ "$arg" == "--dry-run" ]] && DRY_RUN="true" && export DRY_RUN && break
+    done
     mode=$(parse_module_args "$@")
     
     case "$mode" in
@@ -76,8 +78,8 @@ main() {
         *)
             echo "Usage: $0 {battery|ac|status} [--dry-run]"
             echo ""
-            echo "  battery    Offline 11 cores (cpu1-5, cpu10-15), keep 5 online"
-            echo "  ac         Online all 16 cores"
+            echo "  battery    All cores stay online (offlining caused freezes, no power saved)"
+            echo "  ac         Online all 16 cores (default)"
             echo "  status     Show current core status"
             exit 1
             ;;

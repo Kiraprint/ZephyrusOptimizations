@@ -112,6 +112,9 @@ show_status() {
 
 main() {
     local mode
+    for arg in "$@"; do
+        [[ "$arg" == "--dry-run" ]] && DRY_RUN="true" && export DRY_RUN && break
+    done
     mode=$(parse_module_args "$@")
     
     case "$mode" in

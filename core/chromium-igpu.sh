@@ -24,13 +24,14 @@ get_user_home() {
     eval echo "~$user"
 }
 
-# Chromium GPU flags for forcing iGPU
+# Chromium GPU flags for forcing iGPU.
+# Modern Chromium (2024+) enables VA-API on Linux GL automatically;
+# --use-gl/--use-angle are obsolete. ozone-platform-hint=auto lets
+# Electron apps work under both Wayland and X11 sessions.
 CHROMIUM_GPU_FLAGS=(
-    "--use-gl=angle"
-    "--use-angle=gl"
-    "--enable-features=VaapiVideoDecoder,VaapiVideoEncoder"
+    "--enable-features=VaapiVideoDecoder,VaapiVideoEncoder,VaapiVideoDecodeLinuxGL,VaapiVideoEncodeLinuxGL"
     "--disable-features=UseChromeOSDirectVideoDecoder"
-    "--ozone-platform=wayland"
+    "--ozone-platform-hint=auto"
 )
 
 # Flag files for different Chromium-based apps
@@ -160,7 +161,7 @@ apply_battery() {
         
         # Skip if already exists with correct content
         if [[ -f "$full_path" ]]; then
-            if grep -q "use-gl=angle" "$full_path" 2>/dev/null; then
+            if grep -q "VaapiVideoDecodeLinuxGL" "$full_path" 2>/dev/null; then
                 log "  [skip] $flag_file already configured"
                 continue
             fi

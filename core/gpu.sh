@@ -63,15 +63,17 @@ load_nvidia_modules() {
 }
 
 disable_nvidia_services() {
-    log "  Disabling NVIDIA suspend services (dGPU is off)..."
+    log "  Disabling NVIDIA services (dGPU is off)..."
     systemctl disable --now nvidia-suspend.service nvidia-resume.service nvidia-hibernate.service 2>/dev/null
-    log "    [ok] nvidia-suspend/resume/hibernate → disabled"
+    systemctl disable --now nvidia-powerd.service 2>/dev/null
+    log "    [ok] nvidia-suspend/resume/hibernate/powerd → disabled"
 }
 
 enable_nvidia_services() {
-    log "  Enabling NVIDIA suspend services (dGPU is on)..."
+    log "  Enabling NVIDIA services (dGPU is on)..."
     systemctl enable --now nvidia-suspend.service nvidia-resume.service nvidia-hibernate.service 2>/dev/null
-    log "    [ok] nvidia-suspend/resume/hibernate → enabled"
+    systemctl enable --now nvidia-powerd.service 2>/dev/null
+    log "    [ok] nvidia-suspend/resume/hibernate/powerd → enabled"
 }
 # --- PCIe bridge recovery -------------------------------------------------------
 _pcie_bridge_sbr() {
