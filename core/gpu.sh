@@ -82,6 +82,19 @@ apply_battery() {
     if [[ ! -d "/sys/bus/pci/devices/0000:01:00.0" ]]; then
         warn "dGPU not on the bus — check cardwire/journal for what happened"
     fi
+
+    # nvidia-powerd (Dynamic Boost) pins the dGPU via NVML — cardwire lsof
+    # shows it holding /dev/nvidia0 + /dev/nvidiactl, keeping the driver
+    # RM-active (Video Memory: Active). It is an AC/gaming feature; stop it
+    # on battery so nothing holds the dGPU while it should sleep.
+    if systemctl is-active --quiet nvidia-powerd 2>/dev/null; then
+        if [[ "$DRY_RUN" == "true" ]]; then
+            log "  [dry-run] would stop nvidia-powerd (pins dGPU in D0)"
+        else
+            systemctl stop nvidia-powerd 2>/dev/null || true
+            log "  [ok] nvidia-powerd stopped (Dynamic Boost is AC-only)"
+        fi
+    fi
 }
 
 apply_ac() {
@@ -96,6 +109,12 @@ apply_ac() {
     # the dGPU is then available for explicit ML/gaming workloads.
     if [[ ! -d "/sys/bus/pci/devices/0000:01:00.0" ]]; then
         warn "dGPU not on the bus — it returns on the next reboot"
+    fi
+
+    # Re-enable Dynamic Boost on AC (per asus-linux/nvidia-laptop-power-cfg)
+    if ! systemctl is-active --quiet nvidia-powerd 2>/dev/null; then
+        systemctl start nvidia-powerd 2>/dev/null || true
+        log "  [ok] nvidia-powerd started (Dynamic Boost on AC)"
     fi
 }
 

@@ -59,9 +59,11 @@ echo "  ✓ Udev reloaded"
 echo ""
 
 # Step 5: Install dGPU cleanup + nvidia-powerd guard (D3cold safety)
-echo "[5/7] Installing dGPU D3cold cleanup + nvidia-powerd guard..."
+echo "[5/7] Installing dGPU D3cold cleanup + monitor + nvidia-powerd guard..."
 cp "$SCRIPT_DIR/dgpu-cleanup.sh" /usr/local/bin/dgpu-cleanup
 chmod +x /usr/local/bin/dgpu-cleanup
+cp "$SCRIPT_DIR/core/dgpu-monitor.sh" /usr/local/bin/dgpu-monitor
+chmod +x /usr/local/bin/dgpu-monitor
 cp "$SCRIPT_DIR/nvidia-powerd-guard.sh" /usr/local/bin/nvidia-powerd-guard
 chmod +x /usr/local/bin/nvidia-powerd-guard
 cp "$SCRIPT_DIR/90-dgpu-cleanup.rules" /etc/udev/rules.d/
@@ -69,8 +71,10 @@ mkdir -p /etc/systemd/system/nvidia-powerd.service.d
 cp "$SCRIPT_DIR/nvidia-powerd-guard.conf" /etc/systemd/system/nvidia-powerd.service.d/guard.conf
 systemctl daemon-reload
 udevadm control --reload-rules
-echo "  ✓ dGPU cleanup rule + nvidia-powerd guard installed"
-echo "    (D3cold removal unloads the nvidia driver; powerd restarts are safe no-ops)"
+touch /var/log/zephyrus-dgpu.log
+echo "  ✓ dGPU cleanup rule + monitor + nvidia-powerd guard installed"
+echo "    (D3cold removal is logged to /var/log/zephyrus-dgpu.log;"
+echo "     powerd restarts are safe no-ops when the GPU is absent)"
 echo ""
 
 # Step 6: Install scx_lavd scheduler unit (used by AC mode)
