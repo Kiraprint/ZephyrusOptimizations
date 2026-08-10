@@ -13,6 +13,10 @@ source "$SCRIPT_DIR/common.sh"
 LOG_PREFIX="[pci-power]"
 
 GPU_PCI_ADDR="0000:01:00.0"
+# Root port upstream of the dGPU. Excluded from runtime PM toggling too:
+# putting it into 'auto' while the dGPU D3colds removes the whole subtree
+# from the bus on this platform (ASUS EC cuts slot power).
+GPU_PCI_BRIDGE="0000:00:01.0"
 
 show_status() {
     echo "=== PCI Power Status ==="
@@ -66,9 +70,10 @@ apply_battery() {
         local pci_addr
         pci_addr=$(echo "$pci_ctrl" | grep -oP '0000:[0-9a-f:.]+')
         
-        # Skip GPU — nvidia driver manages its own PM state
-        if [[ "$pci_addr" == "$GPU_PCI_ADDR" ]]; then
-            log "  [skip] GPU $pci_addr — nvidia driver manages own PM"
+        # Skip GPU + its root port — nvidia driver manages own PM; bridge
+        # runtime-suspend with dGPU D3cold causes bus removal here
+        if [[ "$pci_addr" == "$GPU_PCI_ADDR" || "$pci_addr" == "$GPU_PCI_BRIDGE" ]]; then
+            log "  [skip] $pci_addr — GPU subtree (nvidia PM + platform D3cold quirk)"
         else
             sysfs_write "$pci_ctrl" "auto" "  PCI $pci_addr → auto"
         fi
