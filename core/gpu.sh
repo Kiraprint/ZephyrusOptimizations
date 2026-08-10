@@ -133,17 +133,17 @@ apply_ac() {
         return 0
     fi
 
-    cardwire_set_mode "hybrid"
-
-    # If the dGPU is not on the bus (D3cold removal), do NOT touch the nvidia
-    # driver: NVML/RM access against the zombie device hangs the system
-    # (14:13:21 freeze: nvidia-powerd attach concurrent with the ac flow).
-    # A reboot re-enumerates the GPU; modules/services come up normally then.
+    # If the dGPU is not on the bus (D3cold removal / zombie driver), do NOT
+    # touch anything NVIDIA: cardwire mode switches restart nvidia-powerd,
+    # and NVML/RM access against the hot-removed device hangs the system
+    # (14:13:21 freeze). A reboot re-enumerates the GPU.
     if [[ ! -d "/sys/bus/pci/devices/0000:01:00.0" ]]; then
-        warn "dGPU not on the bus (D3cold removal) — skipping nvidia driver/service management"
+        warn "dGPU not on the bus (D3cold removal) — skipping cardwire/nvidia management"
         warn "Reboot to restore the dGPU"
         return 0
     fi
+
+    cardwire_set_mode "hybrid"
 
     if ! lsmod | grep -q "^nvidia "; then
         load_nvidia_modules
