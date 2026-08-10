@@ -72,6 +72,7 @@ cp "$SCRIPT_DIR/nvidia-powerd-guard.conf" /etc/systemd/system/nvidia-powerd.serv
 systemctl daemon-reload
 udevadm control --reload-rules
 touch /var/log/zephyrus-dgpu.log
+chown "${SUDO_USER:-root}" /var/log/zephyrus-dgpu.log 2>/dev/null || true
 echo "  ✓ dGPU cleanup rule + monitor + nvidia-powerd guard installed"
 echo "    (D3cold removal is logged to /var/log/zephyrus-dgpu.log;"
 echo "     powerd restarts are safe no-ops when the GPU is absent)"
