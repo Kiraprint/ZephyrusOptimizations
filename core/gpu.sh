@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # =============================================================================
-# gpu.sh — dGPU access control for ASUS ROG Zephyrus G16 (RTX 5090)
+# gpu.sh — dGPU status reporting for ASUS ROG Zephyrus G16 (RTX 5090)
 #
-# The dGPU's power state is cardwire's job (block on battery -> the driver
-# runtime-suspends it; hybrid on AC). This module only asks cardwire for the
-# mode and reports status. It deliberately does NOT write dgpu_disable, does
-# NOT set PCIe power/control and does NOT unload nvidia modules — removing
-# or forcing the dGPU off the bus on battery costs power, not saves it.
+# The dGPU is fully owned by cardwire: it reacts to power events itself
+# (battery_auto_switch) — integrated on battery (dGPU idles into D3cold),
+# hybrid on AC (available for ML/gaming). This module does NOT act on the
+# dGPU at all: no dgpu_disable writes, no cardwire calls, no PCIe
+# power/control, no module/service management. It only reports status.
 #
 # Test independently:
-#   sudo ./gpu.sh battery      # cardwire integrated (dGPU idles into D3cold)
-#   sudo ./gpu.sh ac           # cardwire hybrid (dGPU available for ML/gaming)
+#   sudo ./gpu.sh battery      # no-op (cardwire handles the dGPU)
+#   sudo ./gpu.sh ac           # no-op (cardwire handles the dGPU)
 #   ./gpu.sh status            # Show current state
 # =============================================================================
 
@@ -18,8 +18,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 LOG_PREFIX="[gpu]"
 
-# Timeout for dgpu-switch operations (in seconds)
-DGPU_TIMEOUT=10
 DGPU_SWITCH="/usr/local/bin/dgpu-switch.sh"
 
 # Cardwire — eBPF-based GPU access control (not power!)
@@ -27,19 +25,6 @@ CARDWIRE_CMD="/usr/bin/cardwire"
 
 cardwire_available() {
     [[ -x "$CARDWIRE_CMD" ]] && systemctl is-active --quiet cardwired 2>/dev/null
-}
-
-cardwire_set_mode() {
-    local mode="$1"
-    if cardwire_available; then
-        local out
-        out=$(timeout 5 "$CARDWIRE_CMD" set "$mode" 2>&1) || true
-        if echo "$out" | grep -qi "has been set"; then
-            log "  cardwire: mode → $mode"
-        else
-            warn "cardwire set $mode: $out"
-        fi
-    fi
 }
 
 cardwire_show_mode() {
@@ -79,44 +64,39 @@ show_status() {
 
     echo ""
     echo "Management:"
-    echo "  battery    → cardwire integrated (dGPU idles into D3cold)"
-    echo "  ac         → cardwire hybrid (dGPU available for ML/gaming)"
+    echo "  dGPU handled automatically by cardwire (battery_auto_switch)"
+    echo "  battery → integrated (D3cold) | ac → hybrid — no script action needed"
 }
 
 apply_battery() {
-    log "=== Battery: dGPU D3cold via cardwire (no removal, no eco) ==="
+    log "=== Battery: dGPU D3cold (cardwire auto-switches to integrated) ==="
 
     if [[ "$DRY_RUN" == "true" ]]; then
-        log "  [dry-run] Would set cardwire integrated (block access -> D3cold)"
+        log "  [dry-run] Nothing to do — cardwire owns the dGPU on battery"
         return 0
     fi
 
-    # Power state is cardwire's part: blocking access lets the driver
-    # runtime-suspend the dGPU (D3cold). This script must NOT write
-    # dgpu_disable or touch PCIe power — removing the dGPU on battery
-    # costs ~20W (device leaves the bus but the rail stays powered).
+    # Cardwire reacts to the UPower battery event itself (battery_auto_switch)
+    # and blocks the dGPU, letting the driver runtime-suspend it (D3cold).
+    # This script deliberately does nothing to the dGPU.
     if [[ ! -d "/sys/bus/pci/devices/0000:01:00.0" ]]; then
         warn "dGPU not on the bus — check cardwire/journal for what happened"
     fi
-
-    cardwire_set_mode "integrated"
 }
 
 apply_ac() {
-    log "=== AC: dGPU available (Hybrid) ==="
+    log "=== AC: dGPU available (cardwire auto-switches to hybrid) ==="
 
     if [[ "$DRY_RUN" == "true" ]]; then
-        log "  [dry-run] Would set cardwire hybrid (dGPU available)"
+        log "  [dry-run] Nothing to do — cardwire owns the dGPU on AC"
         return 0
     fi
 
-    # Same rule as battery: cardwire owns the dGPU. No dgpu-switch standard,
-    # no service management — restoring the GPU is cardwire's + reboot's job.
+    # Cardwire unblocks the dGPU itself on the AC event (battery_auto_switch);
+    # the dGPU is then available for explicit ML/gaming workloads.
     if [[ ! -d "/sys/bus/pci/devices/0000:01:00.0" ]]; then
         warn "dGPU not on the bus — it returns on the next reboot"
     fi
-
-    cardwire_set_mode "hybrid"
 }
 
 main() {
@@ -134,8 +114,8 @@ main() {
         *)
             echo "Usage: $0 {battery|ac|status} [--dry-run]"
             echo ""
-            echo "  battery    cardwire integrated (dGPU idles into D3cold)"
-            echo "  ac         cardwire hybrid (dGPU available)"
+            echo "  battery    no-op — cardwire handles dGPU (D3cold on battery)"
+            echo "  ac         no-op — cardwire handles dGPU (hybrid on AC)"
             echo "  status     Show current GPU power state"
             exit 1
             ;;
