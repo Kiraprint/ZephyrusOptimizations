@@ -45,23 +45,29 @@ Also: cardwire logs "Switched to Integrated" and restarts nvidia-powerd at
 the same second; nvidia-powerd then fails to attach ("Failed to attach all
 GPUs / GPU Attach client failed 0x0").
 
-MECHANISM (CORRECTED)
---------------------
-Cardwire's integrated mode only eBPF-blocks process access to the dGPU
-(no MUX involvement — the ASUS MUX is asusctl's domain). The block leaves
-the GPU idle, and the driver's fine-grained runtime power management
-(NVreg_DynamicPowerManagement=0x02 + NVreg_EnableGpuFirmware=1) lets the
-RM/GSP firmware initiate its deep power state (RTD3 / GC6 entry) from the
-firmware side — WITHOUT the Linux driver's runtime-PM callbacks. On this
-platform (root port 0000:00:01.0 has no _PR3 power resources) that
-firmware-initiated D3cold is realized as a silent bus removal.
+MECHANISM (FINAL — verified with debug logging + daemon strace)
+--------------------------------------------------------------
+The device is removed from the PCI bus while fully in D0, by the
+platform/EC. NO software layer participates:
 
-Evidence fits: no nv_pmops_runtime_suspend, no nv_pci_remove, no ACPI
-D3cold _DSM call, no dmesg — the transition happens in the GSP/firmware.
-The RM-side entry points (subdeviceCtrlCmdGc6Entry, 
-RmConfigureUpstreamPortForRTD3) are marked notrace and could not be
-kprobed; NVreg_EnableStreamDebug=1 has been added to capture the RM's own
-log of the transition on the next boot.
+  - driver runtime PM: not called (kprobe)
+  - RM/GSP firmware power transition: NOT logged even with
+    NVreg_EnableStreamDebug=1 + NVreg_EnableGPUResetLogging=1
+    (dmesg stays empty at the event — no GC6/RTD3 messages)
+  - power_state never shows D3Cold before the removal (cardwire's tracker
+    polls it 18x during the switch: D0 -> device gone)
+  - kernel PCI PM: power/control=on does not prevent it
+  - cardwire (daemon straced during the switch): writes NOTHING to sysfs —
+    it only READS power_state, applies its eBPF process block, and restarts
+    nvidia-powerd. No MUX writes (MUX is asusctl's domain)
+
+Trigger: the fully-blocked + idle state created by the eBPF block (and the
+nvidia-powerd fd detach). Once nothing can touch the dGPU, the platform
+drops it off the bus — silently, without any driver notification. The
+nvidia driver is left with a stale device: /proc entry persists forever,
+"Video Memory: Active" forever, rail stays powered (GPU temp ~53C / ~20W
+on AC while "gone"). Revived by switching to hybrid or replugging AC
+(re-enumerates, driver re-binds).
 
 REPRODUCE
 ---------
