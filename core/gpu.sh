@@ -135,8 +135,16 @@ apply_ac() {
 
     cardwire_set_mode "hybrid"
 
-    # dGPU may be absent (D3cold removal) — ensure the driver is loaded so
-    # runtime PM can manage it once it reappears (e.g. after a reboot)
+    # If the dGPU is not on the bus (D3cold removal), do NOT touch the nvidia
+    # driver: NVML/RM access against the zombie device hangs the system
+    # (14:13:21 freeze: nvidia-powerd attach concurrent with the ac flow).
+    # A reboot re-enumerates the GPU; modules/services come up normally then.
+    if [[ ! -d "/sys/bus/pci/devices/0000:01:00.0" ]]; then
+        warn "dGPU not on the bus (D3cold removal) — skipping nvidia driver/service management"
+        warn "Reboot to restore the dGPU"
+        return 0
+    fi
+
     if ! lsmod | grep -q "^nvidia "; then
         load_nvidia_modules
     fi

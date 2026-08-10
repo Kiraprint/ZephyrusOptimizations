@@ -138,6 +138,13 @@ apply_ac() {
         log "  [dry-run] Would enable persistence mode, lock clocks, renegotiate"
         return 0
     fi
+    # If the dGPU is absent (D3cold removal / zombie driver), do NOT poke it
+    # with nvidia-smi or TGP writes — RM access to a hot-removed device can
+    # hang the whole system (14:13:21 freeze). Reboot restores the GPU.
+    if ! _nvidia_smi --query-gpu=name --format=csv,noheader &>/dev/null; then
+        warn "dGPU not accessible (D3cold removal) — skipping power cap"
+        return 1
+    fi
     # 1. Push EC TGP attributes (works even while GPU is D3cold)
     set_armoury_tgp
     # 2. Enable persistence mode (retries until GPU wakes from D3cold)
