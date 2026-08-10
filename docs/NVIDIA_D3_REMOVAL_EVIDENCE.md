@@ -45,16 +45,23 @@ Also: cardwire logs "Switched to Integrated" and restarts nvidia-powerd at
 the same second; nvidia-powerd then fails to attach ("Failed to attach all
 GPUs / GPU Attach client failed 0x0").
 
-MECHANISM HYPOTHESIS
+MECHANISM (CORRECTED)
 --------------------
-Cardwire's integrated mode drives the ASUS MUX (gpu_mux_mode=1 here). The
-EC physically disconnects the dGPU (expected hardware behavior), but the
-nvidia driver is left with a stale, non-functional device:
-  - no remove callback / no Xid / no recovery attempt
-  - /proc/driver/nvidia/gpus entry persists indefinitely
-  - power state frozen at "Active" (rail may stay powered)
-This stale-state behavior (vs. cleanly handling device loss) is the issue
-being reported.
+Cardwire's integrated mode only eBPF-blocks process access to the dGPU
+(no MUX involvement — the ASUS MUX is asusctl's domain). The block leaves
+the GPU idle, and the driver's fine-grained runtime power management
+(NVreg_DynamicPowerManagement=0x02 + NVreg_EnableGpuFirmware=1) lets the
+RM/GSP firmware initiate its deep power state (RTD3 / GC6 entry) from the
+firmware side — WITHOUT the Linux driver's runtime-PM callbacks. On this
+platform (root port 0000:00:01.0 has no _PR3 power resources) that
+firmware-initiated D3cold is realized as a silent bus removal.
+
+Evidence fits: no nv_pmops_runtime_suspend, no nv_pci_remove, no ACPI
+D3cold _DSM call, no dmesg — the transition happens in the GSP/firmware.
+The RM-side entry points (subdeviceCtrlCmdGc6Entry, 
+RmConfigureUpstreamPortForRTD3) are marked notrace and could not be
+kprobed; NVreg_EnableStreamDebug=1 has been added to capture the RM's own
+log of the transition on the next boot.
 
 REPRODUCE
 ---------
