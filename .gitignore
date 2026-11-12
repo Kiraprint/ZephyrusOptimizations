@@ -9,3 +9,6 @@ session-backup.json
 
 # Test outputs
 test-*.log
+
+# Agent session state
+.omo/

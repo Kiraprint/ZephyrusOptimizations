@@ -38,7 +38,7 @@ Your panel has **two VRR modes**:
 ```bash
 # Sets max refresh to 60Hz
 # VRR will drop to 48Hz when idle automatically
-./modules/display.sh battery
+de/gnome/display.sh battery    # KDE: de/kde/display.sh battery
 ```
 
 **Power savings:** ~0.5-1W compared to 240Hz constant
@@ -47,7 +47,7 @@ Your panel has **two VRR modes**:
 ```bash
 # Sets max refresh to 240Hz
 # Full VRR range 48-240Hz available
-./modules/display.sh ac
+de/gnome/display.sh ac         # KDE: de/kde/display.sh ac
 ```
 
 ## Important Notes

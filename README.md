@@ -1,6 +1,7 @@
 # ZephyrusOptimizations
 
-Linux optimizations for ASUS ROG Zephyrus G16 (GU605CX) on CachyOS with multi-DE support (GNOME, KDE Plasma).
+Linux power optimizations for ASUS ROG Zephyrus G16 (GU605CX) on CachyOS, with multi-DE support
+(GNOME, KDE Plasma) and explicit handling of a hybrid NVIDIA setup where the dGPU must stay off.
 
 ## Hardware
 
@@ -8,225 +9,186 @@ Linux optimizations for ASUS ROG Zephyrus G16 (GU605CX) on CachyOS with multi-DE
 |-----------|---------------|
 | Model | ASUS ROG Zephyrus G16 (GU605CX) |
 | CPU | Intel Core Ultra 9 285H (Arrow Lake) - 6 P-cores, 8 E-cores, 2 LP E-cores |
-| iGPU | Intel Arc Graphics (Xe LPG) |
-| dGPU | NVIDIA RTX 5090 |
+| iGPU | Intel Arc Graphics (Arrow Lake) - `xe` KMD, PCI `0000:00:02.0` |
+| dGPU | NVIDIA RTX 5090 Mobile - PCI `0000:01:00.0` |
 | Display | 2560x1600 OLED 240Hz (VRR 48-240Hz) |
 | IR Camera | Shinetech USB2.0 (Windows Hello compatible) |
 
 ## Prerequisites
 
-### Required Packages
-
 ```bash
 # CachyOS / Arch
-sudo pacman -S asusctl supergfxctl power-profiles-daemon
+sudo pacman -S asusctl power-profiles-daemon
 
 # AUR packages
-yay -S howdy   # For IR face authentication
+yay -S howdy-git      # IR face authentication (see setup/ir-auth-setup.sh)
 ```
 
-### Services
+External tools this repo calls but does not ship (installed separately under `/usr/local/bin`):
+
+| Tool | Role |
+|------|------|
+| `cardwire` / `cardwired` | eBPF-based dGPU **access** blocking in integrated mode (it does not cut power) |
+| `dgpu-switch.sh` | ACPI/EC rail control (`eco` = `dgpu_disable=1`, `standard` = `0`) |
+| `nvidia-hide` | per-command dGPU hiding wrapper |
 
 ```bash
-# Enable ASUS daemon
 sudo systemctl enable --now asusd
-
-# Enable power profiles
 sudo systemctl enable --now power-profiles-daemon
-
-# Enable supergfxd (GPU switching)
-sudo systemctl enable --now supergfxd
 ```
 
 ## Project Structure
 
 ```
-├── core/                  # DE-agnostic modules (CPU, GPU, network, audio, etc.)
+├── core/                  # DE-agnostic modules (CPU, GPU, network, audio, …)
 ├── de/
-│   ├── gnome/            # GNOME-specific (display via Mutter, extensions)
-│   └── kde/              # KDE-specific (display via kscreen-doctor, effects)
-├── modules/              # Legacy location (being phased out)
-├── power-switch.sh       # Original GNOME-only script (legacy)
-└── power-switch-unified.sh  # New multi-DE script (recommended)
+│   ├── gnome/             # Mutter D-Bus display + shell extensions
+│   └── kde/               # kscreen-doctor display, KWin effects/compositor/services
+├── docs/                  # current technical notes (NVIDIA D3 investigation, GPU power, KDE)
+│   └── archive/           # superseded session notes / research dumps (historical only)
+├── setup/                 # one-off setup helpers (IR/auth via howdy)
+├── power-switch-unified.sh    # entry point: auto-detects DE, runs core/ + de/ modules
+├── install-udev-autoswitching.sh  # installs udev rules + event handler
+├── zephyrus-power-event.sh    # udev AC/battery event handler
+├── zephyrus-power-boot.service, zephyrus-scx-lavd.service
+├── nvidia-powerd-guard.sh, nvidia-powerd-guard.conf   # safe nvidia-powerd restarts
+├── dgpu-cleanup.sh, 90-dgpu-cleanup.rules             # kernel-remove uevent cleanup path
+├── 99-zephyrus-power.rules, aspm-boot-params.conf
+└── test-structure.sh      # verifies core/ + de/ layout
 ```
-
-### Desktop Environment Support
-
-**Supported DEs:**
-- ✅ GNOME (Wayland/X11) - Mutter D-Bus, gnome-extensions
-- ✅ KDE Plasma (Wayland/X11) - kscreen-doctor, kwin effects
-
-**Auto-detection:** The unified script automatically detects your DE and loads appropriate modules.
 
 ## Features
 
 ### Power Management (`power-switch-unified.sh`)
 
-Automatic power profile switching between AC and battery:
-
-| Mode | Actual Draw | Features |
-|------|-------------|----------|
-| Battery | ~10-12W idle | Turbo off, EPP=power, 48-60Hz VRR, WiFi power-save, dGPU suspended |
-| AC | Full 240W | All cores boosted, EPP=performance, 240Hz display, max cooling |
-
-> **Note**: The original 3-5W target was unrealistic. RAPL power capping caused system lag without meaningful power savings on Arrow Lake (Intel Thread Director + deep C-states are already efficient). Current approach: let the CPU idle naturally, focus on peripherals and display.
-
 ```bash
-# Manual switching (unified multi-DE script)
-sudo ./power-switch-unified.sh battery
-sudo ./power-switch-unified.sh ac
-sudo ./power-switch-unified.sh status
-
-# Dry-run mode (preview changes)
+sudo ./power-switch-unified.sh battery        # also: ac | status
 sudo ./power-switch-unified.sh battery --dry-run
-
-# Legacy GNOME-only script (still available)
-sudo ./power-switch.sh battery
-sudo ./power-switch.sh ac
-
-# Auto-switching via udev (see UDEV_SETUP.md for installation)
-# Once installed, power switches automatically when AC plugged/unplugged
 ```
 
-### IR Face Authentication (`modules/ir-auth-setup.sh`)
+| Mode | CPU | Display | dGPU |
+|------|-----|---------|------|
+| Battery | turbo off, `min_perf_pct=8`, EPP `power` | 60Hz, VRR 48-60 | cardwire integrated + EC rail cut (`dgpu-switch eco`), NVIDIA modules unloaded, suspend services off |
+| AC | turbo on, `min_perf_pct=15`, `max_perf_pct=100`, EPP `balance_performance` | 240Hz | `dgpu-switch standard` + cardwire hybrid, modules/services restored |
+
+Platform profile (`quiet`/`low-power` → `performance`) is only overridden on AC; a manual
+`balanced`/`performance` choice survives power events.
+
+> **Note**: the original 3–5 W idle target was unrealistic. RAPL power capping caused system lag
+> without meaningful savings on Arrow Lake (Thread Director + deep C-states are already efficient),
+> so the current approach lets the CPU idle naturally and focuses on display, peripherals and the dGPU.
+
+Auto-switching via udev: see [UDEV_SETUP.md](UDEV_SETUP.md).
+
+### dGPU handling — what actually happens
+
+Two independent layers, often confused:
+
+1. **Access blocking** — `cardwired` installs an eBPF LSM hook that makes the dGPU subtree
+   (`0000:01:00.0`, its root port, audio function) invisible to userspace: `open()` returns `ENOENT`,
+   `readdir` is rewritten. `lspci`/sysfs look "gone" while the kernel still has the device. No bus
+   removal, no driver event, no MUX write.
+2. **Power** — only the ASUS EC rail actually cuts the dGPU (`dgpu_disable=1` via `dgpu-switch.sh eco`).
+   `NVreg_DynamicPowerManagement=0x00` keeps the device on the bus so the driver never logs a
+   zombie against a dead device.
+
+`nvidia-powerd-guard.sh` makes cardwire's `nvidia-powerd` restarts safe while the dGPU is hidden.
+Evidence, falsified hypotheses and reproduction steps: [docs/NVIDIA_D3COLD_REINVESTIGATION.md](docs/NVIDIA_D3COLD_REINVESTIGATION.md)
+and [docs/NVIDIA_D3_REMOVAL_EVIDENCE.md](docs/NVIDIA_D3_REMOVAL_EVIDENCE.md).
+
+### IR Face Authentication (`setup/ir-auth-setup.sh`)
 
 Windows Hello-style face recognition for login and sudo using the built-in IR camera.
 
 ```bash
-# Configure howdy for Zephyrus G16
-sudo ./modules/ir-auth-setup.sh configure
-
-# Setup PAM for sudo and GDM login
-sudo ./modules/ir-auth-setup.sh pam
-
-# Add your face
-sudo ./modules/ir-auth-setup.sh add
-
-# Test
+sudo ./setup/ir-auth-setup.sh configure   # howdy config for this machine
+sudo ./setup/ir-auth-setup.sh pam         # PAM for sudo + display manager
+sudo ./setup/ir-auth-setup.sh add         # enroll face
 sudo howdy test
 ```
 
-**Configuration highlights:**
-- IR camera: `/dev/video2` (640x400 @ 15fps greyscale)
-- HOG detection (battery-friendly, CNN disabled)
-- Certainty: 4.5 (adjust 3.0-5.0 based on experience)
-- Failed auth snapshots saved to `/var/log/howdy/snapshots`
+IR camera `/dev/video2` (640x400 @ 15fps greyscale), HOG detection, CNN disabled for battery life,
+certainty 4.5. Failed-auth snapshots land in `/var/log/howdy/snapshots`.
 
-### Display Management
+### Display / Effects / Services
 
-**GNOME** (`de/gnome/display.sh`, `de/gnome/set-refresh-rate.py`):
-- Uses Mutter D-Bus API for refresh rate control
-- Automatic switching (60Hz battery / 240Hz AC)
-- VRR support (48-60Hz adaptive on battery)
-
-**KDE Plasma** (`de/kde/display.sh`):
-- Uses kscreen-doctor for refresh rate control
-- Automatic switching (60Hz battery / 240Hz AC)
-- VRR support (48-60Hz adaptive on battery)
-
-### Visual Effects Management
-
-**GNOME** (`de/gnome/extensions.sh`):
-- Disables heavy extensions on battery (blur-my-shell)
-- Re-enables on AC for full visual experience
-
-**KDE Plasma** (`de/kde/effects.sh`):
-- Disables compositor effects on battery (blur, transparency)
-- Reduces animation speed for power savings
-- Re-enables full effects on AC
+| DE | Scripts | Behaviour |
+|----|---------|-----------|
+| GNOME | `de/gnome/display.sh`, `set-refresh-rate.py`, `extensions.sh` | Mutter D-Bus refresh control (60/240Hz), VRR, heavy extension toggling |
+| KDE | `de/kde/display.sh`, `effects.sh`, `services.sh`, `compositor-gpu.sh` | kscreen-doctor refresh/VRR, effect toggles, compositor pinned to iGPU |
 
 ### Core Modules (DE-agnostic)
 
-All modules in `core/` work on any desktop environment:
-
 | Module | Description |
 |--------|-------------|
-| `cpu-power.sh` | RAPL limits, EPP, turbo, HWP boost |
-| `cpu-cores.sh` | Core management (all online - Thread Director handles efficiency) |
-| `gpu.sh` | dGPU power state verification (Hybrid mode) |
-| `nvme-power.sh` | NVMe power management (disable unused drives like Windows disk) |
-| `audio.sh` | Audio codec power save |
+| `cpu-power.sh` | turbo, EPP, HWP boost, `min_perf_pct` (no RAPL cap by design) |
+| `cpu-cores.sh` | core online/offline management (Thread Director handles efficiency) |
+| `gpu.sh` | dGPU power: cardwire mode + EC rail (`dgpu-switch eco/standard`), NVIDIA module/service lifecycle |
+| `dgpu-monitor.sh` | dGPU state logging for power-switch debugging |
+| `igpu-freq.sh` | iGPU frequency scaling (min/max MHz) |
+| `nvidia-power-cap.sh` | unlock the RTX 5090 power cap past the EC ceiling |
+| `nvme-power.sh` | NVMe power management (unused drives) |
+| `audio.sh` | HDA codec power save |
 | `network.sh` | WiFi/Bluetooth power management |
-| `pci-power.sh` | PCIe ASPM, runtime PM |
-| `usb.sh` | USB autosuspend (skips HID) |
+| `pci-power.sh` | PCIe ASPM + runtime PM |
+| `usb.sh` | USB autosuspend (HID-aware) |
 | `kernel-tunables.sh` | NMI watchdog, VM writeback |
-| `platform.sh` | Platform profile via asusctl |
-| `browser-brave.sh` | Browser optimizations |
+| `platform.sh` | ACPI platform profile |
+| `browser-brave.sh` | Brave GPU/rendering flags |
+| `chromium-igpu.sh` | force Chromium/Electron apps onto the iGPU (flag files) |
 
 ## Status
 
-- ✅ Sound issues fixed
-- ✅ Brightness control fixed
-- ✅ Power switching (AC/Battery)
+- ✅ Sound, brightness control, display VRR (48–60Hz battery / 240Hz AC)
+- ✅ Power switching on AC/battery, automatic via udev
 - ✅ IR face authentication (login + sudo)
-- ✅ Display VRR (48-60Hz battery, 240Hz AC)
-- ✅ dGPU power management (suspended in Hybrid mode)
+- ✅ dGPU off on battery (EC rail), available on AC
+- ✅ Chromium/Electron apps pinned to the iGPU (Brave, Paseo, Mercurygram verified)
 
 ## Known Issues
 
-### supergfxctl GPU Switching
+### `xe` TLB invalidation fence timeouts (Arrow Lake)
 
-`supergfxctl -m Integrated` works when run manually but requires logout. The dGPU in Hybrid mode already idles at near-zero power when suspended, so Integrated mode provides minimal additional savings.
-
-**Workaround**: Keep GPU in Hybrid mode - RTX 5090 suspends automatically when unused.
-
-See [PLAN.md](PLAN.md) for details.
-
-## Migration Notes
-
-The project has been reorganized for multi-DE support:
-
-**Old structure** (GNOME-only):
 ```
-modules/display.sh          # GNOME Mutter D-Bus
-modules/cpu-power.sh        # Mixed with display code
-power-switch.sh             # Monolithic GNOME script
+xe 0000:00:02.0: [drm] *ERROR* TLB invalidation fence timeout, seqno=N recv=N-1
 ```
 
-**New structure** (Multi-DE):
-```
-core/cpu-power.sh           # DE-agnostic
-de/gnome/display.sh         # GNOME-specific
-de/kde/display.sh           # KDE-specific
-power-switch-unified.sh     # Auto-detects DE
-```
+Each hit stalls the whole GT for ~1 s — every GPU client (compositor included) freezes briefly, which
+shows up as stutter during interaction. Root cause: on the standalone media GT the CPU reads a stale
+cache line of the G2H CTB; `i915` works it around as `Wa_22016122933`, `xe` did not inherit it.
+Media/VA-API workloads are the main trigger.
 
-**Recommendation:** Use `power-switch-unified.sh` going forward. The old `power-switch.sh` is kept for backward compatibility.
+Tracked upstream (3-patch series, A/B-tested on `7d51`/`7dd1`): [CachyOS/linux-cachyos#1036](https://github.com/CachyOS/linux-cachyos/issues/1036),
+[GitLab xe#8678](https://gitlab.freedesktop.org/drm/xe/kernel/-/work_items/8678).
+Verify with `journalctl -k -b | grep -c 'TLB invalidation fence timeout'`.
 
-## Testing Your Setup
+### dGPU mode switching
+
+`supergfxctl`-style integrated switching is replaced by cardwire + the EC rail. Cutting the rail on
+battery means the dGPU needs `standard` (or a reboot) to come back; while it is rail-off, cardwire
+still reports `hybrid` — harmless, there is nothing to route until it re-enumerates.
+
+## Testing
 
 ```bash
-# Check which DE is detected
-./power-switch-unified.sh status
-
-# Test battery mode (dry-run first)
+./test-structure.sh                      # core/ + de/ layout
+./power-switch-unified.sh status         # DE detection + current state
 sudo ./power-switch-unified.sh battery --dry-run
-sudo ./power-switch-unified.sh battery
-
-# Test AC mode
-sudo ./power-switch-unified.sh ac --dry-run
-sudo ./power-switch-unified.sh ac
-
-# Test individual modules
-cd core
-./cpu-power.sh status
-./gpu.sh status
-
-# Test DE-specific modules
-cd de/gnome  # or de/kde
-./display.sh status
+cd core && ./gpu.sh status               # per-module status/dry-run
 ```
 
 ## Documentation
 
-- [PLAN.md](PLAN.md) - Detailed optimization plan and technical notes
-- [DISPLAY-INFO.md](DISPLAY-INFO.md) - Display configuration details
-- [REORGANIZATION_PLAN.md](REORGANIZATION_PLAN.md) - Multi-DE architecture
-- [UDEV_SETUP.md](UDEV_SETUP.md) - **Automatic power switching via udev rules**
-- [POWER_ANALYSIS.md](POWER_ANALYSIS.md) - CPU power consumption analysis
-- [GPU_ISOLATION_ANALYSIS.md](GPU_ISOLATION_ANALYSIS.md) - GPU power optimization details
-- [docs/GPU_POWER_SWITCH.md](docs/GPU_POWER_SWITCH.md) - **dGPU power switch (eco/standard), GSP firmware limitation, and future fix**
-- [CHROMIUM_IGPU_SOLUTION.md](CHROMIUM_IGPU_SOLUTION.md) - Forcing Chromium apps to use iGPU
+- [docs/NVIDIA_D3COLD_REINVESTIGATION.md](docs/NVIDIA_D3COLD_REINVESTIGATION.md) — dGPU "removal" explained (eBPF hiding vs EC rail)
+- [docs/NVIDIA_D3_REMOVAL_EVIDENCE.md](docs/NVIDIA_D3_REMOVAL_EVIDENCE.md) — logs, kprobes, strace evidence
+- [docs/GPU_POWER_SWITCH.md](docs/GPU_POWER_SWITCH.md) — eco/standard, GSP firmware limitation
+- [docs/WHY_NO_RAPL.md](docs/WHY_NO_RAPL.md) — why there is no RAPL cap
+- [UDEV_SETUP.md](UDEV_SETUP.md) — automatic switching via udev
+- [DISPLAY-INFO.md](DISPLAY-INFO.md) — panel/VRR details
+- [GPU_ISOLATION_ANALYSIS.md](GPU_ISOLATION_ANALYSIS.md), [CHROMIUM_IGPU_SOLUTION.md](CHROMIUM_IGPU_SOLUTION.md) — keeping Chromium/Electron on the iGPU
+- [MUX_SWITCH_BATTERY_MODE.md](MUX_SWITCH_BATTERY_MODE.md), [WHY_LINUX_CANT_DO_SEAMLESS_GPU_SWITCHING.md](WHY_LINUX_CANT_DO_SEAMLESS_GPU_SWITCHING.md)
+- [ZRAM_PARAMETERS_GUIDE.md](ZRAM_PARAMETERS_GUIDE.md), [ASUS_FAN_CURVE_TROUBLESHOOTING.md](ASUS_FAN_CURVE_TROUBLESHOOTING.md)
+- [docs/archive/](docs/archive/) — superseded session notes (Mar–Apr 2026) kept for history only
 
 ## License
 
