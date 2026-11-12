@@ -23,6 +23,12 @@ DGPU_SWITCH="/usr/local/bin/dgpu-switch.sh"
 # Cardwire — eBPF-based GPU access control (not power!)
 CARDWIRE_CMD="/usr/bin/cardwire"
 
+# PCIe bridge upstream of dGPU — used for Secondary Bus Reset recovery
+# when the GPU is stuck (fallen off the bus, GSP crash). Only reachable on
+# AC while the rail is on: cardwire hides 0000:00:01.0 in integrated mode.
+GPU_PCI_BRIDGE="0000:00:01.0"
+SETPCI_CMD="/usr/bin/setpci"
+
 
 # --- NVIDIA module unloading (for clean suspend with dGPU off) ---------------
 NVIDIA_MODULES=("nvidia_drm" "nvidia_modeset" "nvidia_uvm" "nvidia" "nvidia_wmi_ec_backlight")
@@ -103,6 +109,57 @@ cardwire_show_mode() {
         done
     fi
 }
+
+# --- PCIe bridge recovery -------------------------------------------------------
+_pcie_bridge_sbr() {
+    log "  Attempting PCIe Secondary Bus Reset on bridge $GPU_PCI_BRIDGE..."
+
+    if [[ ! -x "$SETPCI_CMD" ]]; then
+        warn "  setpci not found — install pciutils for SBR recovery"
+        return 1
+    fi
+
+    if [[ ! -d "/sys/bus/pci/devices/$GPU_PCI_BRIDGE" ]]; then
+        warn "  Bridge $GPU_PCI_BRIDGE not found — cannot reset"
+        return 1
+    fi
+
+    # Log current link state before reset
+    local link_status
+    link_status=$(setpci -s "$GPU_PCI_BRIDGE" CAP_EXP+0x12.w 2>/dev/null || echo "unknown")
+    log "  Pre-reset link status: $link_status"
+
+    # Set Secondary Bus Reset bit (bit 6) in Bridge Control register
+    # This forces the downstream device to retrain PCIe link
+    if ! $SETPCI_CMD -s "$GPU_PCI_BRIDGE" BRIDGE_CONTROL.w=0x40 2>/dev/null; then
+        warn "  SBR failed — bridge may be locked"
+        return 1
+    fi
+
+    sleep 1
+
+    # Clear SBR bit
+    $SETPCI_CMD -s "$GPU_PCI_BRIDGE" BRIDGE_CONTROL.w=0x00 2>/dev/null || true
+
+    sleep 2
+
+    # Rescan the bridge to re-enumerate downstream devices
+    if [[ -w "/sys/bus/pci/devices/$GPU_PCI_BRIDGE/rescan" ]]; then
+        echo 1 > "/sys/bus/pci/devices/$GPU_PCI_BRIDGE/rescan" 2>/dev/null || true
+    fi
+
+    sleep 1
+
+    # Check if GPU reappeared
+    if [[ -d "/sys/bus/pci/devices/0000:01:00.0" ]]; then
+        log "  GPU reappeared after SBR"
+        return 0
+    else
+        warn "  GPU did not reappear after SBR"
+        return 1
+    fi
+}
+
 
 show_status() {
     echo "=== GPU Power State ==="
@@ -251,9 +308,20 @@ apply_ac() {
         warn "Reboot to re-enable the dGPU."
     elif echo "$output" | grep -q "FAILED\|GPU not found"; then
         warn "dGPU did not reappear after power restoration."
-        warn "Reboot required."
-    else
-        log "  $output"
+        # Recovery attempt: the link may be down but the rail is now powered,
+        # so a Secondary Bus Reset can force retraining + re-enumeration.
+        if _pcie_bridge_sbr; then
+            if ! lsmod | grep -q "^nvidia "; then
+                load_nvidia_modules
+            fi
+            if lsmod | grep -q "^nvidia "; then
+                log "  [ok] driver rebound after SBR"
+            else
+                warn "GPU visible but driver did not bind. Reboot required."
+            fi
+        else
+            warn "Reboot required."
+        fi
     fi
 
     # dGPU is back — reload NVIDIA modules if they were unloaded
@@ -277,12 +345,13 @@ main() {
         battery)  apply_battery ;;
         ac)       apply_ac ;;
         status)   show_status ;;
+        recover)  _pcie_bridge_sbr ;;
         *)
-            echo "Usage: $0 {battery|ac|status} [--dry-run]"
-            echo ""
+            echo "Usage: $0 {battery|ac|status|recover} [--dry-run]"
             echo "  battery    Power off dGPU (eco, dgpu_disable=1, 0W)"
             echo "  ac         Restore dGPU power (standard, dgpu_disable=0)"
             echo "  status     Show current GPU power state"
+            echo "  recover    PCIe Secondary Bus Reset on the dGPU bridge (AC only)"
             exit 1
             ;;
     esac
