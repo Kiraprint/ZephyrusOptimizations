@@ -102,7 +102,7 @@ apply_battery() {
 apply_ac() {
     require_root
     log "=== Applying AC CPU power settings ==="
-    
+
     log "--- RAPL power limits ---"
     sysfs_write "$RAPL_PL1" "$RAPL_PL1_AC" "PL1 (sustained) → $((RAPL_PL1_AC / 1000000))W"
     sysfs_write "$RAPL_PL2" "$RAPL_PL2_AC" "PL2 (burst) → $((RAPL_PL2_AC / 1000000))W"
@@ -111,11 +111,11 @@ apply_ac() {
     log "--- CPU governor settings ---"
     sysfs_write "/sys/devices/system/cpu/intel_pstate/no_turbo" "0" "Turbo boost → enabled"
     sysfs_write "/sys/devices/system/cpu/intel_pstate/hwp_dynamic_boost" "1" "HWP dynamic boost → enabled"
-    sysfs_write "/sys/devices/system/cpu/intel_pstate/min_perf_pct" "30" "min_perf_pct → 30%"
+    sysfs_write "/sys/devices/system/cpu/intel_pstate/min_perf_pct" "15" "min_perf_pct → 15% (low idle floor, peak untouched)"
 
     log ""
-    set_epp_all "performance"
-    
+    set_epp_all "balance_performance"
+
     log ""
     log "AC CPU power settings applied"
 }

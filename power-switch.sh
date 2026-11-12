@@ -614,11 +614,12 @@ apply_ac() {
     # 4. Enable HWP dynamic boost
     sysfs_write "/sys/devices/system/cpu/intel_pstate/hwp_dynamic_boost" "1" "HWP dynamic boost → enabled"
 
-    # 5. Raise min_perf_pct
-    sysfs_write "/sys/devices/system/cpu/intel_pstate/min_perf_pct" "30" "min_perf_pct → 30%"
+    # 5. Lower idle floor — peak untouched (turbo on, RAPL 110W)
+    sysfs_write "/sys/devices/system/cpu/intel_pstate/min_perf_pct" "15" "min_perf_pct → 15%"
+    sysfs_write "/sys/devices/system/cpu/intel_pstate/max_perf_pct" "100" "max_perf_pct → 100%"
 
-    # 6. Set EPP to performance on all cores
-    set_epp_all "performance"
+    # 6. Set EPP to balance_performance on all cores (idle drops, burst intact)
+    set_epp_all "balance_performance"
 
     log ""
 

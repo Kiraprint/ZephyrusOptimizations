@@ -68,13 +68,21 @@ apply_battery() {
 apply_ac() {
     require_root
     log "=== Applying AC platform profile ==="
-    
+
+    # Only override battery profiles (quiet/low-power) on AC. A manual
+    # 'balanced'/'performance' choice survives power events.
     if [[ -f "$PLATFORM_PROFILE" ]]; then
-        sysfs_write "$PLATFORM_PROFILE" "performance" "Platform profile → performance"
+        local current
+        current=$(cat "$PLATFORM_PROFILE" 2>/dev/null) || current="(unreadable)"
+        if [[ "$current" == "quiet" || "$current" == "low-power" ]]; then
+            sysfs_write "$PLATFORM_PROFILE" "performance" "Platform profile → performance"
+        else
+            log "  [skip] Platform profile '$current' — manual choice preserved (battery profiles only are overridden on AC)"
+        fi
     else
         warn "Platform profile not available"
     fi
-    
+
     log ""
     log "AC platform profile applied"
 }

@@ -2,10 +2,12 @@
 # nvidia-powerd-guard.sh — guard wrapper for nvidia-powerd.
 #
 # nvidia-powerd (Dynamic Boost) attaches to the GPU via NVML/RM at startup.
-# If the dGPU was D3cold-removed from the bus (ASUS platform behavior),
-# that attach can hang the whole system (freeze at 14:13:21). cardwire
-# restarts nvidia-powerd on every mode switch, so the restart can race with
-# an absent GPU. This wrapper makes such restarts safe no-ops.
+# In cardwire integrated mode the dGPU's sysfs/dev nodes are hidden by the
+# eBPF block (ENOENT), so NVML attach can hang (freeze at 14:13:21). cardwire
+# restarts nvidia-powerd on every mode switch, so the restart can race with a
+# blocked/hidden GPU. This wrapper makes such restarts safe no-ops.
+# (Mechanism corrected 2026-08-10 — see docs/NVIDIA_D3COLD_REINVESTIGATION.md:
+# no real bus removal occurs; the hiding is eBPF.)
 #
 # Installed via systemd drop-in:
 #   /etc/systemd/system/nvidia-powerd.service.d/guard.conf

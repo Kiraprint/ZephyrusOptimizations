@@ -1,24 +1,14 @@
 #!/usr/bin/env bash
 # =============================================================================
-# gpu.sh — dGPU status reporting for ASUS ROG Zephyrus G16 (RTX 5090)
+# gpu.sh — GPU power management for ASUS ROG Zephyrus G16 (RTX 5090)
 #
-# The dGPU is fully owned by cardwire: it reacts to power events itself
-# (battery_auto_switch) — integrated on battery (dGPU idles into D3cold),
-# hybrid on AC (available for ML/gaming). This module does NOT act on the
-# dGPU at all: no dgpu_disable writes, no cardwire calls, no PCIe
-# power/control, no module/service management. It only reports status.
-#
-# REQUIRED: NVreg_DynamicPowerManagement=0x00 (kernel cmdline, set in
-# /etc/limine-entry-tool.d/fix_brightness.conf). With 0x02 (fine-grained)
-# the driver internally attempts D3cold the moment the GPU is clientless —
-# every cardwire mode switch restarts nvidia-powerd, whose fd close creates
-# exactly that idle moment, and on this platform (no _PR3 on the root port)
-# D3cold = bus removal: communication dies, driver freezes in "D0".
-# 0x00 keeps the device on the bus; cardwire's eBPF block still gates access.
+# Integrated with dgpu-switch.sh for ACPI-level dGPU power control
+#   - Eco mode (battery): dgpu_disable=1, 0W on dGPU
+#   - Standard (AC):      dgpu_disable=0, restore GPU (may need reboot)
 #
 # Test independently:
-#   sudo ./gpu.sh battery      # no-op (cardwire handles the dGPU)
-#   sudo ./gpu.sh ac           # no-op (cardwire handles the dGPU)
+#   sudo ./gpu.sh battery      # Power off dGPU (may need logout)
+#   sudo ./gpu.sh ac           # Restore dGPU
 #   ./gpu.sh status            # Show current state
 # =============================================================================
 
@@ -26,13 +16,75 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 LOG_PREFIX="[gpu]"
 
+# Timeout for dgpu-switch operations (in seconds)
+DGPU_TIMEOUT=10
 DGPU_SWITCH="/usr/local/bin/dgpu-switch.sh"
 
 # Cardwire — eBPF-based GPU access control (not power!)
 CARDWIRE_CMD="/usr/bin/cardwire"
 
+
+# --- NVIDIA module unloading (for clean suspend with dGPU off) ---------------
+NVIDIA_MODULES=("nvidia_drm" "nvidia_modeset" "nvidia_uvm" "nvidia" "nvidia_wmi_ec_backlight")
+
+unload_nvidia_modules() {
+    log "  Unloading NVIDIA kernel modules for clean suspend..."
+    local failed=0
+    for mod in "${NVIDIA_MODULES[@]}"; do
+        if lsmod | grep -q "^${mod} "; then
+            if modprobe -r "$mod" 2>/dev/null; then
+                log "    [ok] $mod unloaded"
+            else
+                log "    [skip] $mod still in use (processes hold it)"
+                failed=1
+            fi
+        fi
+    done
+    if [[ "$failed" -eq 0 ]]; then
+        log "  [ok] All NVIDIA modules unloaded — DRM subsystem freed"
+    else
+        log "  [warn] Some modules still loaded — suspend may still fail"
+        log "  [hint] Log out or close apps using libnvidia-*.so"
+    fi
+}
+
+load_nvidia_modules() {
+    log "  Loading NVIDIA kernel modules..."
+    if modprobe nvidia_drm 2>/dev/null; then
+        log "    [ok] NVIDIA modules loaded"
+    else
+        log "    [warn] NVIDIA modules failed to load — reboot may be needed"
+    fi
+}
+
+disable_nvidia_services() {
+    log "  Disabling NVIDIA services (dGPU is off)..."
+    systemctl disable --now nvidia-suspend.service nvidia-resume.service nvidia-hibernate.service 2>/dev/null
+    systemctl disable --now nvidia-powerd.service 2>/dev/null
+    log "    [ok] nvidia-suspend/resume/hibernate/powerd → disabled"
+}
+
+enable_nvidia_services() {
+    log "  Enabling NVIDIA services (dGPU is on)..."
+    systemctl enable --now nvidia-suspend.service nvidia-resume.service nvidia-hibernate.service 2>/dev/null
+    systemctl enable --now nvidia-powerd.service 2>/dev/null
+    log "    [ok] nvidia-suspend/resume/hibernate/powerd → enabled"
+}
 cardwire_available() {
     [[ -x "$CARDWIRE_CMD" ]] && systemctl is-active --quiet cardwired 2>/dev/null
+}
+
+cardwire_set_mode() {
+    local mode="$1"
+    if cardwire_available; then
+        local out
+        out=$(timeout 5 "$CARDWIRE_CMD" set "$mode" 2>&1) || true
+        if echo "$out" | grep -qi "has been set"; then
+            log "  cardwire: mode → $mode"
+        else
+            warn "cardwire set $mode: $out"
+        fi
+    fi
 }
 
 cardwire_show_mode() {
@@ -72,58 +124,145 @@ show_status() {
 
     echo ""
     echo "Management:"
-    echo "  dGPU handled automatically by cardwire (battery_auto_switch)"
-    echo "  battery → integrated (D3cold) | ac → hybrid — no script action needed"
+    echo "  battery    → sudo dgpu-switch.sh eco + cardwire integrated"
+    echo "  ac         → sudo dgpu-switch.sh standard (or reboot) + cardwire hybrid"
 }
 
 apply_battery() {
-    log "=== Battery: dGPU D3cold (cardwire auto-switches to integrated) ==="
+    log "=== Eco: dGPU power off (battery mode) ==="
 
     if [[ "$DRY_RUN" == "true" ]]; then
-        log "  [dry-run] Nothing to do — cardwire owns the dGPU on battery"
+        log "  [dry-run] Would power off dGPU (dgpu_disable=1) + cardwire integrated"
         return 0
     fi
 
-    # Cardwire reacts to the UPower battery event itself (battery_auto_switch)
-    # and blocks the dGPU, letting the driver runtime-suspend it (D3cold).
-    # This script deliberately does nothing to the dGPU.
-    if [[ ! -d "/sys/bus/pci/devices/0000:01:00.0" ]]; then
-        warn "dGPU not on the bus — check cardwire/journal for what happened"
+    if [[ ! -x "$DGPU_SWITCH" ]]; then
+        warn "dgpu-switch.sh not found at $DGPU_SWITCH"
+        warn "Install it first, or manually: echo 1 > /sys/devices/platform/asus-nb-wmi/dgpu_disable"
+        return 1
     fi
 
-    # nvidia-powerd (Dynamic Boost) pins the dGPU via NVML — cardwire lsof
-    # shows it holding /dev/nvidia0 + /dev/nvidiactl, keeping the driver
-    # RM-active (Video Memory: Active). It is an AC/gaming feature; stop it
-    # on battery so nothing holds the dGPU while it should sleep.
-    if systemctl is-active --quiet nvidia-powerd 2>/dev/null; then
-        if [[ "$DRY_RUN" == "true" ]]; then
-            log "  [dry-run] would stop nvidia-powerd (pins dGPU in D0)"
-        else
-            systemctl stop nvidia-powerd 2>/dev/null || true
-            log "  [ok] nvidia-powerd stopped (Dynamic Boost is AC-only)"
-        fi
+    # GPU may already be gone from the bus (D3cold removal on this platform).
+    # eco still applies: dgpu_disable=1 persists in the EC and gives a clean
+    # boot next time (dGPU never enumerated -> no driver, no zombie).
+    if [[ ! -d "/sys/bus/pci/devices/0000:01:00.0" ]] || \
+       ! cat "/sys/bus/pci/devices/0000:01:00.0/vendor" &>/dev/null; then
+        warn "GPU not present on the bus (D3cold removal) — eco still applied for next boot"
     fi
+
+    # cardwired holds /dev/nvidia* open itself — dgpu-switch eco aborts while
+    # any handle exists ("ERROR: NVIDIA in use", blocker: cardwired). Order:
+    # integrated first (needs daemon + device), then stop the daemon so the
+    # rail cut can proceed. Daemon is restarted after eco below.
+    cardwire_set_mode "integrated"
+
+    if systemctl is-active --quiet cardwired 2>/dev/null; then
+        log "  Stopping cardwired before rail cut (holds /dev/nvidia* open)"
+        systemctl stop cardwired 2>/dev/null || true
+        sleep 1
+    fi
+
+    # Close GPU clients that hold /dev/nvidia* open — they make dgpu-switch
+    # abort with "ERROR: NVIDIA in use" and the rail never gets cut (observed:
+    # Mission Center keeps 15 fds on /dev/nvidia0 via NVML, 64Gram holds the
+    # device mapped with zero active contexts — invisible in nvtop). Stop
+    # nvidia-powerd too so module unload succeeds afterwards.
+    local holders
+    holders=$(pgrep -f 'missioncenter|missioncenter-m' 2>/dev/null) || true
+    if [[ -n "$holders" ]]; then
+        log "  Stopping GPU monitor (holds /dev/nvidia* open): missioncenter"
+        pkill -f 'missioncenter' 2>/dev/null || true
+        sleep 1
+    fi
+    # Any other process with the device mapped pins the rail even when idle
+    # (nvtop shows no utilization for mapped-but-idle clients). Report them
+    # instead of aborting blindly.
+    local mapped
+    mapped=$(fuser /dev/nvidia0 /dev/nvidiactl 2>/dev/null | grep -oP '\d+' | sort -u || true)
+    if [[ -n "$mapped" ]]; then
+        log "  Processes with /dev/nvidia* mapped:"
+        echo "$mapped" | while read -r pid; do
+            log "    $pid $(ps -p "$pid" -o comm= 2>/dev/null)"
+        done
+    fi
+    if systemctl is-active --quiet nvidia-powerd 2>/dev/null; then
+        log "  Stopping nvidia-powerd before rail cut"
+        systemctl stop nvidia-powerd 2>/dev/null || true
+    fi
+
+    # Run eco mode — will fail gracefully if NVIDIA is in use
+    local output
+    output=$(timeout "$DGPU_TIMEOUT" "$DGPU_SWITCH" eco 2>&1) || true
+
+    # Rail cut done (or device already gone) — bring cardwired back so the
+    # daemon stays managed. NOTE: with the device rail-off cardwire reports
+    # hybrid and refuses `set integrated` (no offload dGPU present); harmless —
+    # there is nothing to route until the device re-enumerates on AC.
+    if systemctl is-enabled --quiet cardwired 2>/dev/null; then
+        systemctl start cardwired 2>/dev/null || true
+    fi
+
+    if echo "$output" | grep -q "ERROR: NVIDIA in use"; then
+        warn "dGPU is in use by user processes — cannot power off."
+        warn "Log out first, then unplug AC again, or run manually:"
+        warn "  sudo dgpu-switch.sh eco"
+        warn ""
+        warn "Processes blocking dGPU power-off:"
+        echo "$output" | grep -E "^\s+[A-Z]"
+        return 1
+    fi
+
+    if echo "$output" | grep -q "Eco\|Confirmed\|ECO"; then
+        log "  [ok] dGPU powered off (dgpu_disable=1, 0W)"
+    else
+        log "  $output"
+    fi
+
+    # dGPU is now powered off — unload NVIDIA kernel modules to free DRM
+    # so KWin doesn't block suspend with "atomic commit failed: Device or resource busy"
+    unload_nvidia_modules
+
+    # Disable NVIDIA suspend services — no point with dGPU off
+    disable_nvidia_services
 }
 
 apply_ac() {
-    log "=== AC: dGPU available (cardwire auto-switches to hybrid) ==="
+    log "=== Standard: dGPU power on (AC mode) ==="
 
     if [[ "$DRY_RUN" == "true" ]]; then
-        log "  [dry-run] Nothing to do — cardwire owns the dGPU on AC"
+        log "  [dry-run] Would restore dGPU power (dgpu_disable=0) + cardwire hybrid"
         return 0
     fi
 
-    # Cardwire unblocks the dGPU itself on the AC event (battery_auto_switch);
-    # the dGPU is then available for explicit ML/gaming workloads.
-    if [[ ! -d "/sys/bus/pci/devices/0000:01:00.0" ]]; then
-        warn "dGPU not on the bus — it returns on the next reboot"
+    if [[ ! -x "$DGPU_SWITCH" ]]; then
+        warn "dgpu-switch.sh not found at $DGPU_SWITCH"
+        return 1
     fi
 
-    # Re-enable Dynamic Boost on AC (per asus-linux/nvidia-laptop-power-cfg)
-    if ! systemctl is-active --quiet nvidia-powerd 2>/dev/null; then
-        systemctl start nvidia-powerd 2>/dev/null || true
-        log "  [ok] nvidia-powerd started (Dynamic Boost on AC)"
+    local output
+    output=$(timeout "$DGPU_TIMEOUT" "$DGPU_SWITCH" standard 2>&1) || true
+
+    cardwire_set_mode "hybrid"
+
+    if echo "$output" | grep -q "SUCCESS"; then
+        log "  [ok] dGPU fully restored and ready"
+    elif echo "$output" | grep -q "PARTIAL\|GPU detected but driver"; then
+        warn "dGPU power restored but NVIDIA driver won't bind."
+        warn "Reboot to re-enable the dGPU."
+    elif echo "$output" | grep -q "FAILED\|GPU not found"; then
+        warn "dGPU did not reappear after power restoration."
+        warn "Reboot required."
+    else
+        log "  $output"
     fi
+
+    # dGPU is back — reload NVIDIA modules if they were unloaded
+    if ! lsmod | grep -q "^nvidia "; then
+        load_nvidia_modules
+    fi
+
+    # Re-enable NVIDIA suspend services — dGPU is on
+    enable_nvidia_services
 }
 
 main() {
@@ -141,8 +280,8 @@ main() {
         *)
             echo "Usage: $0 {battery|ac|status} [--dry-run]"
             echo ""
-            echo "  battery    no-op — cardwire handles dGPU (D3cold on battery)"
-            echo "  ac         no-op — cardwire handles dGPU (hybrid on AC)"
+            echo "  battery    Power off dGPU (eco, dgpu_disable=1, 0W)"
+            echo "  ac         Restore dGPU power (standard, dgpu_disable=0)"
             echo "  status     Show current GPU power state"
             exit 1
             ;;

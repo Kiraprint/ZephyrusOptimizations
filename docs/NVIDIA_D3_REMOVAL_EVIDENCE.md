@@ -45,29 +45,36 @@ Also: cardwire logs "Switched to Integrated" and restarts nvidia-powerd at
 the same second; nvidia-powerd then fails to attach ("Failed to attach all
 GPUs / GPU Attach client failed 0x0").
 
-MECHANISM (FINAL — verified with debug logging + daemon strace)
---------------------------------------------------------------
-The device is removed from the PCI bus while fully in D0, by the
-platform/EC. NO software layer participates:
+MECHANISM (SUPERSEDED 2026-08-10 — see NVIDIA_D3COLD_REINVESTIGATION.md)
+---------------------------------------------------------------
+**This conclusion is DISPROVEN by live reproduction.** The device is never
+removed from the PCI bus. cardwire's eBPF LSM (`file_open`/`inode_permission`/
+`inode_getattr` → ENOENT, plus `sys_exit_getdents64` readdir rewriting) hides
+the whole dGPU subtree — GPU 0000:01:00.0, its parent root port 0000:00:01.0,
+and the audio function — from userspace. sysfs/lspci show "gone" while the
+kernel still has the device registered (IOMMU groups, /proc/interrupts alive,
+no udev remove uevents, no dmesg, driver state continuous, `cardwire set
+hybrid` restores instantly with no re-probe).
 
-  - driver runtime PM: not called (kprobe)
-  - RM/GSP firmware power transition: NOT logged even with
-    NVreg_EnableStreamDebug=1 + NVreg_EnableGPUResetLogging=1
-    (dmesg stays empty at the event — no GC6/RTD3 messages)
-  - power_state never shows D3Cold before the removal (cardwire's tracker
-    polls it 18x during the switch: D0 -> device gone)
-  - kernel PCI PM: power/control=on does not prevent it
-  - cardwire (daemon straced during the switch): writes NOTHING to sysfs —
-    it only READS power_state, applies its eBPF process block, and restarts
-    nvidia-powerd. No MUX writes (MUX is asusctl's domain)
+The old kprobe evidence (zero events on nv_pmops_runtime_suspend /
+nv_pci_remove / nv_acpi_d3cold_dsm_for_upstream_port) was correct and is now
+explained: no driver or kernel path ever ran because nothing happened at the
+hardware level. The "driver frozen in D0" is a healthy driver at real D0 —
+nvidia-smi fails only because opening /dev/nvidia* gets ENOENT from the eBPF
+block.
 
-Trigger: the fully-blocked + idle state created by the eBPF block (and the
-nvidia-powerd fd detach). Once nothing can touch the dGPU, the platform
-drops it off the bus — silently, without any driver notification. The
-nvidia driver is left with a stale device: /proc entry persists forever,
-"Video Memory: Active" forever, rail stays powered (GPU temp ~53C / ~20W
-on AC while "gone"). Revived by switching to hybrid or replugging AC
-(re-enumerates, driver re-binds).
+The real problems, restated:
+- "can't communicate with dGPU in integrated mode" = cardwire eBPF ENOENT (by design);
+- "dGPU stays at D0" = cardwire does no power management AND nvidia-open's
+  fine-grained RTD3/GC6 never completes entry on this platform (GC6 gated on
+  upstream-port PEX _DSM config; fallback GCOFF gated on FB ≤ 1 GiB). The only
+  real dGPU power cut is the ASUS EC rail (`dgpu_disable=1`, dgpu-switch.sh
+  eco), whose nvidia-open re-bind limitation is NVIDIA bug #1064 + Blackwell
+  VBIOS reset bug.
+
+The watchdog patch (local OGKM commits f854a8a/442aee3) is a no-op here:
+device_is_registered() never goes false.
+
 
 REPRODUCE
 ---------
