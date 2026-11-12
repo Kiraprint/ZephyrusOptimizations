@@ -114,6 +114,11 @@ cardwire_show_mode() {
 _pcie_bridge_sbr() {
     log "  Attempting PCIe Secondary Bus Reset on bridge $GPU_PCI_BRIDGE..."
 
+    if [[ $EUID -ne 0 ]]; then
+        warn "  SBR needs root (setpci writes bridge config space)"
+        return 1
+    fi
+
     if [[ ! -x "$SETPCI_CMD" ]]; then
         warn "  setpci not found — install pciutils for SBR recovery"
         return 1

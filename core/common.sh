@@ -82,7 +82,7 @@ parse_module_args() {
     local mode=""
     for arg in "$@"; do
         case "$arg" in
-            battery|ac|status|test)
+            battery|ac|status|test|recover)
                 mode="$arg"
                 ;;
             --dry-run)
